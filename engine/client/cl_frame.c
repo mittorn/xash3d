@@ -35,11 +35,18 @@ qboolean CL_IsPlayerIndex( int idx )
 
 qboolean CL_IsPredicted( void )
 {
-	if( !cl_predict->integer || !cl.frame.valid )
+	if( !cl_predict->integer)
+		return 0;
+
+	if( !cl.frame.valid )
 		return false;
 
-	if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence ) >= ( CL_UPDATE_BACKUP - 1 ))
+
+	/*if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence ) >= CL_UPDATE_MASK)
+	{
+		MsgDev(D_INFO, "OutSeq - IncSeq: %i UPDBACK: %i\n", cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence, CL_UPDATE_BACKUP - 1);
 		return false;
+	}*/
 
 	return true;
 }

@@ -225,7 +225,7 @@ void CL_EmitEntities()
 	//cl.commands[4 * v2 / 76].frame_lerp = lerped_points;
 
 	CL_LinkPlayers(); // implement
-	CL_LinkPacketEntities(); // implement
+	//CL_LinkPacketEntities(); // implement
 
 	int i;
 	// seems like Xash doesn't have cl_visentities, so why not to use all available entities?

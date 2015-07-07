@@ -46,11 +46,11 @@ qboolean CL_IsPredicted( void )
 		return false;
 
 
-	/*if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence ) >= CL_UPDATE_MASK)
+	if(( cls.netchan.outgoing_sequence - cls.netchan.incoming_acknowledged ) >= CL_UPDATE_MASK)
 	{
-		MsgDev(D_INFO, "OutSeq - IncSeq: %i UPDBACK: %i\n", cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence, CL_UPDATE_BACKUP - 1);
+		//MsgDev(D_INFO, "OutSeq - IncSeq: %i UPDBACK: %i\n", cls.netchan.outgoing_sequence - cls.netchan.incoming_sequence, CL_UPDATE_BACKUP - 1);
 		return false;
-	}*/
+	}
 
 	return true;
 }

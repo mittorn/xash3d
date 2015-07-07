@@ -192,6 +192,60 @@ void CL_AddLinksToPmove( void )
 
 /*
 ===============
+CL_LinkPlayers
+
+*/
+void CL_LinkPlayers()
+{
+
+}
+
+/*
+===============
+CL_EmitEntities
+
+===============
+*/
+void CL_EmitEntities()
+{
+	if(cls.state != ca_active)
+		return;
+
+	if(!cl.validsequence)
+		return;
+
+	if(!cl.frames[cl.parsecountmod].valid)
+		return;
+
+	// I don't know what is the lerp point. It needed for many functions be implemented, so...
+	// TODO
+
+	//int v2 = 19 * (CL_UPDATE_MASK & (cls.netchan.outgoing_sequence - 1));
+	//long double lerped_points = CL_LerpPoint();
+	//cl.commands[4 * v2 / 76].frame_lerp = lerped_points;
+
+	CL_LinkPlayers(); // implement
+	CL_LinkPacketEntities(); // implement
+
+	int i;
+	// seems like Xash doesn't have cl_visentities, so why not to use all available entities?
+	// It may be more slower. When I will find analogue of visentities in Xash, it need to be rewrited
+	for(i = 0; i < clgame.maxEntities; ++i)
+	{
+		cl_entity_t *v7 = CL_EDICT_NUM(i);
+		int v8 = v7->curstate.aiment;
+		if( v8 && (v7->curstate.movetype == MOVETYPE_FOLLOW) )
+		{
+			cl_entity_t *v9 = CL_EDICT_NUM(v8);
+			VectorCopy(v9->origin, v7->origin);
+		}
+	}
+	// CL_AddEntities will fire events and add temp ents
+	CL_AddEntities();
+}
+
+/*
+===============
 CL_SetSolid
 
 Builds all the pmove physents for the current frame
@@ -821,10 +875,14 @@ void CL_PredictMovement( void )
 		return;
 	}
 
+
 	ack = cls.netchan.incoming_acknowledged;
 	outgoing_command = cls.netchan.outgoing_sequence;
 
 	ASSERT( cl.refdef.cmd != NULL );
+
+	//pfnSetUpPlayerPrediction(false, false);
+	//CL_SetSolidEntities();
 
 	// setup initial pmove state
 	CL_SetupPMove( clgame.pmove, cd, &player->curstate, cl.refdef.cmd );
@@ -852,6 +910,8 @@ void CL_PredictMovement( void )
 
 		frame++;
 	}
+
+	//pfnSetUpPlayerPrediction(true, false);
 
 	CL_PostRunCmd( cl.refdef.cmd, frame );
 		

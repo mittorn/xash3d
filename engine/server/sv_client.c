@@ -1977,7 +1977,7 @@ Print list of entities to client
 */
 void SV_EntList_f( sv_client_t *cl )
 {
-	edict_t	*ent;
+	edict_t	*ent = NULL;
 	int	i;
 
 	if( !Cvar_VariableInteger( "sv_cheats" ) && !sv_enttools_enable->value || sv.background )
@@ -2023,7 +2023,7 @@ Print specified entity information to client
 */
 void SV_EntInfo_f( sv_client_t *cl )
 {
-	edict_t	*ent;
+	edict_t	*ent = NULL;
 	int	i = 0;
 
 	if( !Cvar_VariableInteger( "sv_cheats" ) && !sv_enttools_enable->value || sv.background )
@@ -2098,7 +2098,7 @@ Print specified entity information to client
 */
 void SV_EntFire_f( sv_client_t *cl )
 {
-	edict_t	*ent;
+	edict_t	*ent = NULL;
 	int	i = 0;
 
 	if( !sv_enttools_enable->value || sv.background )

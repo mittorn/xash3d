@@ -1668,6 +1668,9 @@ void CL_InitLocal( void )
 	Cmd_AddCommand ("god", NULL, "toggle godmode" );
 	Cmd_AddCommand ("fov", NULL, "set client field of view" );
 	Cmd_AddCommand ("kill", NULL, "commit suicide" );
+	Cmd_AddCommand ("ent_list", NULL, "list entities on server" );
+	Cmd_AddCommand ("ent_fire", NULL, "fire entity command (be careful)" );
+	Cmd_AddCommand ("ent_info", NULL, "dump entity information" );
 
 	// register our commands
 	Cmd_AddCommand ("pause", NULL, "pause the game (if the server allows pausing)" );

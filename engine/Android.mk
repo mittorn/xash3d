@@ -163,6 +163,6 @@ LOCAL_SHARED_LIBRARIES += SDL2
 endif
 LOCAL_STATIC_LIBRARIES := NanoGL
 
-LOCAL_LDLIBS := -ldl -llog
+LOCAL_LDLIBS := -ldl -llog -lm_hard
 
 include $(BUILD_SHARED_LIBRARY)

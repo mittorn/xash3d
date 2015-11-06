@@ -4524,7 +4524,7 @@ static void R_InitBuiltinTextures( void )
 	{ "*vsdct", &tr.vsdctCubeTexture, R_InitVSDCTCubemap, TEX_SYSTEM },
 	{ NULL, NULL, NULL }
 	};
-	size_t	i, num_builtin_textures = sizeof( textures ) / sizeof( textures[0] ) - 1;
+	volatile size_t	i, num_builtin_textures = sizeof( textures ) / sizeof( textures[0] ) - 1;
 
 	for( i = 0; i < num_builtin_textures; i++ )
 	{
@@ -4532,6 +4532,7 @@ static void R_InitBuiltinTextures( void )
 		Q_memset( data2D, 0xFF, sizeof( data2D ));
 
 		pic = textures[i].init( &flags );
+		MsgDev( D_NOTE, "Init Texture %d %p\n", i, textures[i].texnum );
 		if( pic == NULL ) continue;
 		*textures[i].texnum = GL_LoadTextureInternal( textures[i].name, pic, flags, false );
 

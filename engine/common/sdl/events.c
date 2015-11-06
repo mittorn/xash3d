@@ -5,6 +5,7 @@
 #include "client.h"
 #include "vgui_draw.h"
 
+int IN_TouchEvent( qboolean down, int fingerID, float x, float y, float dx, float dy );
 int SDLash_EventFilter( SDL_Event* event)
 {
 	#ifdef XASH_VGUI
@@ -38,6 +39,7 @@ int SDLash_EventFilter( SDL_Event* event)
 			// Pass all touch events to client library
 			if(clgame.dllFuncs.pfnTouchEvent)
 				clgame.dllFuncs.pfnTouchEvent(event->tfinger.fingerId, event->tfinger.x, event->tfinger.y, event->tfinger.dx, event->tfinger.dy );
+			IN_TouchEvent( event->type, event->tfinger.fingerId, event->tfinger.x, event->tfinger.y, event->tfinger.dx, event->tfinger.dy );
 			break;
 
 		case SDL_MOUSEBUTTONUP:

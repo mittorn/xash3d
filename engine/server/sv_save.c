@@ -611,22 +611,28 @@ int SV_IsValidSave( void )
 		}
 	}
 
-	if( !CL_Active( ))
+	if( host.type != HOST_DEDICATED )
 	{
-		Msg( "Can't save if not active.\n" );
-		return 0;
-	}
+		// Enable save/load in xashds
 
-	if( CL_IsIntermission( ))
-	{
-		Msg( "Can't save during intermission.\n" );
-		return 0;
-	}
+		if( !CL_Active( ))
+		{
+			Msg( "Can't save if not active.\n" );
+			return 0;
+		}
 
-	if( sv_maxclients->integer != 1 )
-	{
-		Msg( "Can't save multiplayer games.\n" );
-		return 0;
+		if( CL_IsIntermission( ))
+		{
+			Msg( "Can't save during intermission.\n" );
+			return 0;
+		}
+
+		if( sv_maxclients->integer != 1 )
+		{
+			Msg( "Can't save multiplayer games.\n" );
+			return 0;
+		}
+
 	}
 
 	if( svs.clients && svs.clients[0].state == cs_spawned )
@@ -641,7 +647,7 @@ int SV_IsValidSave( void )
 			
 		if( pl->v.deadflag != false || pl->v.health <= 0.0f )
 		{
-			Msg( "Can't savegame with a dead player\n" );
+			Msg( "Can't savegame with a dead player.\n" );
 			return 0;
 		}
 
@@ -1866,7 +1872,7 @@ void SV_LoadAdjacentEnts( const char *pOldLevel, const char *pLandmarkName )
 			{
 				index = EntryInTable( pSaveData, sv.name, index );
 				if( index < 0 ) break;
-				flags |= (1<<index);
+				flags |= (1U << index);
 			}
 
 			if( flags ) movedCount = SV_CreateEntityTransitionList( pSaveData, flags );
@@ -2112,9 +2118,6 @@ qboolean SV_LoadGame( const char *pName )
 	GAME_HEADER	gameHeader;
 	string		name;
 
-	if( host.type == HOST_DEDICATED )
-		return false;
-
 	if( !pName || !pName[0] )
 		return false;
 
@@ -2132,6 +2135,7 @@ qboolean SV_LoadGame( const char *pName )
 	sv.background = false;
 
 	SCR_BeginLoadingPlaque ( false );
+	S_StopBackgroundTrack();
 
 	MsgDev( D_INFO, "Loading game from %s...\n", name );
 	SV_ClearSaveDir();
@@ -2159,10 +2163,13 @@ qboolean SV_LoadGame( const char *pName )
 		return false;
 	}
 
-	Cvar_FullSet( "coop", "0", CVAR_LATCH );
-	Cvar_FullSet( "teamplay", "0", CVAR_LATCH );
-	Cvar_FullSet( "deathmatch", "0", CVAR_LATCH );
-	Cvar_FullSet( "maxplayers", "1", CVAR_LATCH );
+	if( host.type != HOST_DEDICATED )
+	{
+		Cvar_FullSet( "coop", "0", CVAR_LATCH );
+		Cvar_FullSet( "teamplay", "0", CVAR_LATCH );
+		Cvar_FullSet( "deathmatch", "0", CVAR_LATCH );
+		Cvar_FullSet( "maxplayers", "1", CVAR_LATCH );
+	}
 
 	return Host_NewGame( gameHeader.mapName, true );
 }
@@ -2293,6 +2300,7 @@ qboolean SV_GetComment( const char *savename, char *comment )
 	char	*pData, *pSaveData, *pFieldName, **pTokenList;
 	string	name, description;
 	file_t	*f;
+	short shortpool;
 
 	f = FS_Open( savename, "rb", true );
 	if( !f )
@@ -2377,10 +2385,12 @@ qboolean SV_GetComment( const char *savename, char *comment )
 	else pTokenList = NULL;
 
 	// short, short (size, index of field name)
-	nFieldSize = *(short *)pData;
+	Q_memcpy(&shortpool, pData, sizeof(short));
+	nFieldSize = shortpool;
 	pData += sizeof( short );
 
-	pFieldName = pTokenList[*(short *)pData];
+	Q_memcpy(&shortpool, pData, sizeof(short));
+	pFieldName = pTokenList[shortpool];
 
 	if( Q_stricmp( pFieldName, "GameHeader" ))
 	{
@@ -2403,10 +2413,12 @@ qboolean SV_GetComment( const char *savename, char *comment )
 		// Size
 		// szName
 		// Actual Data
-		nFieldSize = *(short *)pData;
+		Q_memcpy(&shortpool, pData, sizeof(short));
+		nFieldSize = shortpool;
 		pData += sizeof( short );
 
-		pFieldName = pTokenList[*(short *)pData];
+		Q_memcpy(&shortpool, pData, sizeof(short));
+		pFieldName = pTokenList[shortpool];
 		pData += sizeof( short );
 
 		if( !Q_stricmp( pFieldName, "comment" ))

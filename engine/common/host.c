@@ -18,13 +18,16 @@ GNU General Public License for more details.
 #include <SDL.h>
 #endif
 #include <stdarg.h>  // va_args
+#include <errno.h> // errno
 
 #include "common.h"
 #include "netchan.h"
+#include "server.h"
 #include "protocol.h"
 #include "mod_local.h"
 #include "mathlib.h"
 #include "input.h"
+#include "touch.h"
 #include "engine_features.h"
 #include "render_api.h"	// decallist_t
 #include "sdl/events.h"
@@ -32,7 +35,6 @@ GNU General Public License for more details.
 typedef void (*pfnChangeGame)( const char *progname );
 
 pfnChangeGame	pChangeGame = NULL;
-HINSTANCE		hCurrent;	// hinstance of current .dll
 host_parm_t	host;	// host parms
 sysinfo_t		SI;
 
@@ -43,15 +45,20 @@ convar_t	*host_limitlocal;
 convar_t	*host_cheats;
 convar_t	*host_maxfps;
 convar_t	*host_framerate;
+convar_t	*host_sleeptime;
+convar_t	*host_xashds_hacks;
 convar_t	*con_gamemaps;
+convar_t	*download_types;
 convar_t	*build, *ver;
+convar_t	*host_mapdesign_fatal;
+convar_t 	*cmd_scripting = NULL;
 
 static int num_decals;
 
 // these cvars will be duplicated on each client across network
 int Host_ServerState( void )
 {
-	return Cvar_VariableInteger( "host_serverstate" );
+	return host_serverstate->integer;
 }
 
 int Host_CompareFileTime( long ft1, long ft2 )
@@ -71,6 +78,10 @@ void Host_ShutdownServer( void )
 {
 	if( !SV_Active()) return;
 	Q_strncpy( host.finalmsg, "Server was killed", MAX_STRING );
+
+	Log_Printf( "Server shutdown\n" );
+	Log_Close();
+
 	SV_Shutdown( false );
 }
 
@@ -82,13 +93,13 @@ Host_PrintEngineFeatures
 void Host_PrintEngineFeatures( void )
 {
 	if( host.features & ENGINE_WRITE_LARGE_COORD )
-		MsgDev( D_AICONSOLE, "^3EXT:^7 big world support enabled\n" );
+		MsgDev( D_AICONSOLE, "^3EXT:^7 Big world support enabled\n" );
 
 	if( host.features & ENGINE_BUILD_SURFMESHES )
-		MsgDev( D_AICONSOLE, "^3EXT:^7 surfmeshes enabled\n" );
+		MsgDev( D_AICONSOLE, "^3EXT:^7 Surfmeshes enabled\n" );
 
 	if( host.features & ENGINE_LOAD_DELUXEDATA )
-		MsgDev( D_AICONSOLE, "^3EXT:^7 deluxemap support enabled\n" );
+		MsgDev( D_AICONSOLE, "^3EXT:^7 Deluxemap support enabled\n" );
 
 	if( host.features & ENGINE_TRANSFORM_TRACE_AABB )
 		MsgDev( D_AICONSOLE, "^3EXT:^7 Transform trace AABB enabled\n" );
@@ -97,7 +108,7 @@ void Host_PrintEngineFeatures( void )
 		MsgDev( D_AICONSOLE, "^3EXT:^7 Large lightmaps enabled\n" );
 
 	if( host.features & ENGINE_COMPENSATE_QUAKE_BUG )
-		MsgDev( D_AICONSOLE, "^3EXT:^7 Compensate quake bug enabled\n" );
+		MsgDev( D_AICONSOLE, "^3EXT:^7 Quake bug compensation enabled\n" );
 }
 
 /*
@@ -134,6 +145,7 @@ void Host_EndGame( const char *message, ... )
 	{
 		Q_snprintf( host.finalmsg, sizeof( host.finalmsg ), "Host_EndGame: %s", string );
 		SV_Shutdown( false );
+		return;
 	}
 	
 	if( host.type == HOST_DEDICATED )
@@ -160,7 +172,10 @@ aborts the current host frame and goes on with the next one
 */
 void Host_AbortCurrentFrame( void )
 {
-	longjmp( host.abortframe, 1 );
+	if( host.framecount == 0 ) // abort frame was not set up
+		Sys_Break("Could not abort current frame");
+	else
+		longjmp( host.abortframe, 1 );
 }
 
 /*
@@ -231,8 +246,7 @@ Host_Exec_f
 void Host_Exec_f( void )
 {
 	string	cfgpath;
-	char	*f, *txt; 
-	size_t	len;
+	char	*f;
 
 	if( Cmd_Argc() != 2 )
 	{
@@ -250,22 +264,20 @@ void Host_Exec_f( void )
 	Q_strncpy( cfgpath, Cmd_Argv( 1 ), sizeof( cfgpath )); 
 	FS_DefaultExtension( cfgpath, ".cfg" ); // append as default
 
-	f = FS_LoadFile( cfgpath, &len, false );
+	f = (char *)FS_LoadFile( cfgpath, NULL, false );
 	if( !f )
 	{
 		MsgDev( D_NOTE, "couldn't exec %s\n", Cmd_Argv( 1 ));
 		return;
 	}
 
-	// adds \n\0 at end of the file
-	txt = Z_Malloc( len + 2 );
-	Q_memcpy( txt, f, len );
-	Q_strncat( txt, "\n", len + 2 );
-	Mem_Free( f );
-
 	MsgDev( D_INFO, "execing %s\n", Cmd_Argv( 1 ));
-	Cbuf_InsertText( txt );
-	Mem_Free( txt );
+
+	// terminate the string with newline just in case it's missing
+	// insertion order is backwards from execution order
+	Cbuf_InsertText( "\n" );
+	Cbuf_InsertText( f );
+	Mem_Free( f );
 }
 
 /*
@@ -300,7 +312,16 @@ void Host_Minimize_f( void )
 
 qboolean Host_IsLocalGame( void )
 {
+	if( host.type != HOST_DEDICATED )
 	if( CL_Active() && SV_Active() && CL_GetMaxClients() == 1 )
+		return true;
+	return false;
+}
+
+qboolean Host_IsLocalClient( void )
+{
+	// only the local client has the active server
+	if( CL_Active() && SV_Active())
 		return true;
 	return false;
 }
@@ -322,7 +343,7 @@ qboolean Host_RegisterDecal( const char *name )
 
 	for( i = 1; i < MAX_DECALS && host.draw_decals[i][0]; i++ )
 	{
-		if( !Q_stricmp( host.draw_decals[i], shortname ))
+		if( !Q_stricmp( (char *)host.draw_decals[i], shortname ))
 			return true;
 	}
 
@@ -333,7 +354,7 @@ qboolean Host_RegisterDecal( const char *name )
 	}
 
 	// register new decal
-	Q_strncpy( host.draw_decals[i], shortname, sizeof( host.draw_decals[i] ));
+	Q_strncpy( (char *)host.draw_decals[i], shortname, sizeof( host.draw_decals[i] ));
 	num_decals++;
 
 	return true;
@@ -446,7 +467,7 @@ void Host_RestartDecals( void )
 
 		decalIndex = pfnDecalIndex( entry->name );
 
-		// BSP and studio decals has different messages
+		// BSP and studio decals have different messages
 		if( entry->flags & FDECAL_STUDIO )
 		{
 			// NOTE: studio decal trace start saved into impactPlaneNormal
@@ -503,7 +524,7 @@ qboolean Host_FilterTime( float time )
 	{
 		float	minframetime;
 
-		// limit fps to withing tolerable range
+		// limit fps to within tolerable range
 		fps = bound( MIN_FPS, fps, MAX_FPS );
 
 		minframetime = 1.0f / fps;
@@ -511,7 +532,8 @@ qboolean Host_FilterTime( float time )
 		if(( host.realtime - oldtime ) < minframetime )
 		{
 			// framerate is too high
-			return false;		
+			//Sys_Sleep( 2000 * ( minframetime - ( host.realtime - oldtime ) ) );
+			return false;
 		}
 	}
 
@@ -521,7 +543,7 @@ qboolean Host_FilterTime( float time )
 
 	if( host_framerate->value > 0 && ( Host_IsLocalGame()))
 	{
-		float fps = host_framerate->value;
+		fps = host_framerate->value;
 		if( fps > 1 ) fps = 1.0f / fps;
 		host.frametime = fps;
 	}
@@ -535,6 +557,41 @@ qboolean Host_FilterTime( float time )
 
 /*
 =================
+Host_Autosleep
+=================
+*/
+void Host_Autosleep( void )
+{
+	int sleeptime = host_sleeptime->value;
+
+	if( host.type == HOST_DEDICATED )
+	{
+		// let the dedicated server some sleep
+		Sys_Sleep( sleeptime );
+
+	}
+	else
+	{
+		if( host.state == HOST_NOFOCUS )
+		{
+			if( Host_ServerState() && CL_IsInGame( ))
+				Sys_Sleep( sleeptime ); // listenserver
+			else Sys_Sleep( 20 ); // sleep 20 ms otherwise
+		}
+		else if( host.state == HOST_SLEEP )
+		{
+			// completely sleep in minimized state
+			Sys_Sleep( 20 );
+		}
+		else
+		{
+			Sys_Sleep( sleeptime );
+		}
+	}
+}
+
+/*
+=================
 Host_Frame
 =================
 */
@@ -543,17 +600,21 @@ void Host_Frame( float time )
 	if( setjmp( host.abortframe ))
 		return;
 
-	Host_InputFrame ();	// input frame
+	Host_Autosleep();
 
 	// decide the simulation time
 	if( !Host_FilterTime( time ))
 		return;
+
+	Host_InputFrame ();	// input frame
 
 	Host_GetConsoleCommands ();
 
 	Host_ServerFrame (); // server frame
 	if ( host.type != HOST_DEDICATED )
 		Host_ClientFrame (); // client frame
+
+	HTTP_Run();
 
 	host.framecount++;
 }
@@ -627,7 +688,7 @@ void Host_Error( const char *error, ... )
 		{
 			UI_SetActiveMenu( false );
 			Key_SetKeyDest( key_console );
-			Msg( "Host_Error: %s", hosterror1 );
+			Msg( "^1Host_Error: ^7%s", hosterror1 );
 		}
 		else MSGBOX2( hosterror1 );
 	}
@@ -644,22 +705,23 @@ void Host_Error( const char *error, ... )
 
 	recursive = true;
 	Q_strncpy( hosterror2, hosterror1, MAX_SYSPATH );
-	host.errorframe = host.framecount; // to avoid multply calls per frame
+	host.errorframe = host.framecount; // to avoid multple calls per frame
 	Q_sprintf( host.finalmsg, "Server crashed: %s", hosterror1 );
 
-	// clearing cmd buffer to prevent execute any commands
+	// clear cmd buffer to prevent execution of any commands
 	Cbuf_Clear();
 
 	SV_Shutdown( false );
 	CL_Drop(); // drop clients
 
-	// recreate world if needs
+	// recreate world if required
 	CL_ClearEdicts ();
 
 	// release all models
 	Mod_ClearAll( false );
 
 	recursive = false;
+
 	Host_AbortCurrentFrame();
 }
 
@@ -694,6 +756,50 @@ static void Host_Crash_f( void )
 {
 	*(int *)0 = 0xffffffff;
 }
+/*
+=================
+Host_MapDesignError
+
+Stop mappers for making bad maps
+but allow to ignore errors when need
+=================
+*/
+void Host_MapDesignError( const char *format, ... )
+{
+	char str[256];
+	va_list		argptr;
+	va_start( argptr, format );
+	Q_vsnprintf( str, 256, format, argptr );
+	va_end( argptr );
+	if( host_mapdesign_fatal->value )
+		Host_Error( "Map Design Error: %s\n", str );
+	else
+		Msg( "^1Map Design Error: ^3%s", str );
+}
+/*
+=================
+Host_Userconfigd_f
+
+Exec all configs from userconfig.d directory
+=================
+*/
+void Host_Userconfigd_f( void )
+{
+	search_t		*t;
+	int		i;
+
+	t = FS_Search( "userconfig.d/*.cfg", true, false );
+	if( !t ) return;
+
+	for( i = 0; i < t->numfilenames; i++ )
+	{
+		Cbuf_AddText( va("exec %s\n", t->filenames[i] ) );
+	}
+
+	Mem_Free( t );
+
+}
+
 
 /*
 =================
@@ -703,77 +809,50 @@ Host_InitCommon
 void Host_InitCommon( int argc, const char** argv, const char *progname, qboolean bChangeGame )
 {
 	char		dev_level[4];
-	char		szTemp[MAX_SYSPATH];
-	char		moduleName[64];
-	string		szRootPath;
+	char		*baseDir;
 
-	CRT_Init(); // init some CRT functions
-
-	// some commands may turn engine into infinity loop,
+	// some commands may turn engine into infinite loop,
 	// e.g. xash.exe +game xash -game xash
-	// so we clearing all cmd_args, but leave dbg states as well
+	// so we clear all cmd_args, but leave dbg states as well
 	Sys_ParseCommandLine( argc, argv );
 	
 	host.enabledll = !Sys_CheckParm( "-nodll" );
+
+	host.shutdown_issued = false;
+	host.crashed = false;
 #ifdef DLL_LOADER
 	if( host.enabledll )
-		Setup_LDT_Keeper(); // Must call before any thread creating
+		Setup_LDT_Keeper( ); // Must call before creating any thread
 #endif
 
-#ifdef XASH_SDL
-	if( SDL_Init( SDL_INIT_VIDEO |
-				SDL_INIT_TIMER |
-				SDL_INIT_AUDIO |
-				SDL_INIT_JOYSTICK |
-				SDL_INIT_EVENTS ))
+	if( ( baseDir = getenv( "XASH3D_BASEDIR" ) ) )
 	{
-		MsgDev(D_ERROR, "SDL_Init: %s", SDL_GetError());
-		return 0;
+		Q_strncpy( host.rootdir, baseDir, sizeof(host.rootdir) );
 	}
-#endif
-
-#if defined(__ANDROID__)
-	Q_strncpy(host.rootdir, getenv("XASH3D_BASEDIR"), sizeof(host.rootdir));
-#elif defined(XASH_SDL)
-	if( !(SDL_GetBasePath()) )
-		Sys_Error( "couldn't determine current directory" );
-	Q_strncpy(host.rootdir, SDL_GetBasePath(), sizeof(host.rootdir));
-#else
-	if( !getcwd(host.rootdir, sizeof(host.rootdir) ) )
+	else
+	{
+		#if defined(XASH_SDL)
+		if( !( baseDir = SDL_GetBasePath() ) )
+			Sys_Error( "couldn't determine current directory: %s", SDL_GetError() );
+		Q_strncpy( host.rootdir, baseDir, sizeof( host.rootdir ) );
+		#else
+		if( !getcwd( host.rootdir, sizeof(host.rootdir) ) )
 			host.rootdir[0] = 0;
-#endif
+		#endif
+	}
 
 	if( host.rootdir[Q_strlen( host.rootdir ) - 1] == '/' )
 		host.rootdir[Q_strlen( host.rootdir ) - 1] = 0;
-	if(Sys_CheckParm( "-noch" ))
+
+	if( !Sys_CheckParm( "-noch" ) )
 	{
-#ifdef _WIN32
-		SetErrorMode( SEM_FAILCRITICALERRORS );	// no abort/retry/fail errors
-		host.oldFilter = SetUnhandledExceptionFilter( Sys_Crash );
-		host.hInst = GetModuleHandle( NULL );
-//#elif defined (__ANDROID__)
-//TODO
-#else
-		struct sigaction act;
-		act.sa_sigaction = Sys_Crash;
-		act.sa_flags = SA_SIGINFO | SA_ONSTACK;
-		sigaction(SIGSEGV, &act, &host.oldFilter);
-		sigaction(SIGABRT, &act, &host.oldFilter);
-		sigaction(SIGBUS, &act, &host.oldFilter);
-		sigaction(SIGILL, &act, &host.oldFilter);
-#endif
+		Sys_SetupCrashHandler();
 	}
+
 	host.change_game = bChangeGame;
-	host.state = HOST_INIT; // initialzation started
+	host.state = HOST_INIT; // initialization started
 	host.developer = host.old_developer = 0;
-
-
-#ifdef _WIN32
-	SetErrorMode( SEM_FAILCRITICALERRORS );	// no abort/retry/fail errors
-#endif
-	// some commands may turn engine into infinity loop,
-	// e.g. xash.exe +game xash -game xash
-	// so we clearing all cmd_args, but leave dbg states as well
+	host.textmode = false;
 
 	host.mempool = Mem_AllocPool( "Zone Engine" );
 
@@ -788,84 +867,38 @@ void Host_InitCommon( int argc, const char** argv, const char *progname, qboolea
 		}
 		else host.developer++; // -dev == 1, -dev -console == 2
 	}
-	if( !Sys_CheckParm( "-vguiloader" ) || !Sys_GetParmFromCmdLine( "-vguiloader", host.vguiloader ) )
-	{
-#ifdef _WIN32
-		Q_strcpy(host.vguiloader, "vgui_support.dll");
-#else
-		Q_strcpy(host.vguiloader, "libvgui_support.so");
-#endif
-	}
-
-
-	host.type = HOST_NORMAL; // predict state
-	host.con_showalways = true;
-
-	host.mouse_visible = false;
-
-#ifdef PANDORA
-	if( Sys_CheckParm( "-noshouldermb" )) noshouldermb = 1;
-#endif
-
-#if defined(__ANDROID__)
-	if (chdir(host.rootdir) == 0)
-		MsgDev(D_INFO,"%s is working directory now",host.rootdir);
-	else
-		MsgDev(D_ERROR,"%s is not exists",host.rootdir);
-#elif defined(XASH_SDL)
-	// we can specified custom name, from Sys_NewInstance
-	if( SDL_GetBasePath() && !host.change_game )
-	{
-		Q_strncpy( szTemp, SDL_GetBasePath(), sizeof(szTemp) );
-		FS_FileBase( szTemp, SI.ModuleName );
-	}
-#else
-	FS_FileBase( host.rootdir, SI.ModuleName );
-
-
-#ifdef _WIN32
-	GetModuleFileName( host.hInst, moduleName, sizeof(moduleName) );
-#else
-	// We didn't need full path, only executable name
-	Q_strncpy(moduleName, strrchr(argv[0], '/'), sizeof(moduleName) );
-	//strrchr adds a / at begin of string =(
-	memmove(&moduleName[0], &moduleName[1], sizeof(moduleName) - 1);
-#endif
-	//argv[0] is always stands for program name1
-	Q_strncpy(SI.ModuleName, moduleName, sizeof(SI.ModuleName));
-
-	FS_ExtractFilePath( SI.ModuleName, szRootPath );
-	/*if( Q_stricmp( host.rootdir, szRootPath ))
-	{
-		Q_strncpy( host.rootdir, szRootPath, sizeof( host.rootdir ));
-		SetCurrentDirectory( host.rootdir );
-	}*/
-#endif
-	SetCurrentDirectory( host.rootdir );
-	Q_strncpy( SI.ModuleName, progname, sizeof( SI.ModuleName ));
 
 #ifdef XASH_DEDICATED
-	host.type = HOST_DEDICATED; // hard code dedicated host type
+	host.type = HOST_DEDICATED; // predict state
+#else
+	if( Sys_CheckParm("-dedicated") || progname[0] == '#' )
+		 host.type = HOST_DEDICATED;
+	else host.type = HOST_NORMAL;
 #endif
+	host.con_showalways = true;
+	host.mouse_visible = false;
+
+#ifdef XASH_SDL
+	SDL_Init( SDL_INIT_TIMER );
+	if( SDL_Init( SDL_INIT_VIDEO |SDL_INIT_EVENTS ))
+	{
+		host.type = HOST_DEDICATED;
+	}
+#endif
+
+	if ( SetCurrentDirectory( host.rootdir ) != 0)
+		MsgDev( D_INFO, "%s is working directory now\n", host.rootdir );
+	else
+		Sys_Error( "Changing working directory to %s failed.\n", host.rootdir );
+
+	// set default gamedir
+	if( progname[0] == '#' ) progname++;
+	Q_strncpy( SI.ModuleName, progname, sizeof( SI.ModuleName ));
 
 	if( host.type == HOST_DEDICATED )
 	{
-		// check for duplicate dedicated server
-#ifdef XASH_SDL		
-		host.hMutex = SDL_CreateMutex(  );
-
-		if( !host.hMutex )
-		{
-			MSGBOX( "Dedicated server already running" );
-			Sys_Quit();
-			return;
-		}
-#endif
 		Sys_MergeCommandLine( );
-#ifdef XASH_SDL	
-		SDL_DestroyMutex( host.hMutex );
-		host.hMutex = SDL_CreateSemaphore( 0 );
-#endif
+
 		if( host.developer < 3 ) host.developer = 3; // otherwise we see empty console
 	}
 	else
@@ -875,8 +908,8 @@ void Host_InitCommon( int argc, const char** argv, const char *progname, qboolea
 	}
 
 	host.old_developer = host.developer;
-
-	Con_CreateConsole();
+	if( !Sys_CheckParm( "-nowcon" ) )
+		Con_CreateConsole();
 
 	// first text message into console or log 
 	MsgDev( D_NOTE, "Sys_LoadLibrary: Loading Engine Library - ok\n" );
@@ -885,12 +918,15 @@ void Host_InitCommon( int argc, const char** argv, const char *progname, qboolea
 	Cmd_Init();
 	Cvar_Init();
 
+
 	// share developer level across all dlls
 	Q_snprintf( dev_level, sizeof( dev_level ), "%i", host.developer );
 	Cvar_Get( "developer", dev_level, CVAR_INIT, "current developer level" );
 	Cmd_AddCommand( "exec", Host_Exec_f, "execute a script file" );
 	Cmd_AddCommand( "memlist", Host_MemStats_f, "prints memory pool information" );
-
+	Cmd_AddCommand( "userconfigd", Host_Userconfigd_f, "execute all scripts from userconfig.d" );
+	cmd_scripting = Cvar_Get( "cmd_scripting", "0", CVAR_ARCHIVE, "enable simple condition checking and variable operations" );
+	
 	FS_Init();
 	Image_Init();
 	Sound_Init();
@@ -930,7 +966,9 @@ Host_Main
 int EXPORT Host_Main( int argc, const char **argv, const char *progname, int bChangeGame, pfnChangeGame func )
 {
 	static double	oldtime, newtime;
-
+#ifdef XASH_SDL
+	SDL_Event event;
+#endif
 	pChangeGame = func;	// may be NULL
 
 	Host_InitCommon( argc, argv, progname, bChangeGame );
@@ -944,16 +982,20 @@ int EXPORT Host_Main( int argc, const char **argv, const char *progname, int bCh
 		Cmd_AddCommand ( "net_error", Net_Error_f, "send network bad message from random place");
 	}
 
-	host_cheats = Cvar_Get( "sv_cheats", "0", CVAR_LATCH, "allow cheat variables to enable" );
+	host_cheats = Cvar_Get( "sv_cheats", "0", CVAR_LATCH, "allow usage of cheat commands and variables" );
 	host_maxfps = Cvar_Get( "fps_max", "72", CVAR_ARCHIVE, "host fps upper limit" );
+	host_sleeptime = Cvar_Get( "sleeptime", "1", CVAR_ARCHIVE, "higher value means lower accuracy" );
 	host_framerate = Cvar_Get( "host_framerate", "0", 0, "locks frame timing to this value in seconds" );  
 	host_serverstate = Cvar_Get( "host_serverstate", "0", CVAR_INIT, "displays current server state" );
-	host_gameloaded = Cvar_Get( "host_gameloaded", "0", CVAR_INIT, "inidcates a loaded game.dll" );
-	host_clientloaded = Cvar_Get( "host_clientloaded", "0", CVAR_INIT, "inidcates a loaded client.dll" );
+	host_gameloaded = Cvar_Get( "host_gameloaded", "0", CVAR_INIT, "indicates a loaded game library" );
+	host_clientloaded = Cvar_Get( "host_clientloaded", "0", CVAR_INIT, "indicates a loaded client library" );
 	host_limitlocal = Cvar_Get( "host_limitlocal", "0", 0, "apply cl_cmdrate and rate to loopback connection" );
-	con_gamemaps = Cvar_Get( "con_mapfilter", "1", CVAR_ARCHIVE, "when true show only maps in game folder" );
+	con_gamemaps = Cvar_Get( "con_mapfilter", "1", CVAR_ARCHIVE, "when enabled, show only maps in game folder (no maps from base folder when running mod)" );
+	download_types = Cvar_Get( "download_types", "msec", CVAR_ARCHIVE, "list of types to download: Model, Sounds, Events, Custom" );
 	build = Cvar_Get( "build", va( "%i", Q_buildnum()), CVAR_INIT, "returns a current build number" );
-	ver = Cvar_Get( "ver", va( "%i/%g.%i", PROTOCOL_VERSION, XASH_VERSION, Q_buildnum( ) ), CVAR_INIT, "shows an engine version" );
+	ver = Cvar_Get( "ver", va( "%i/%s.%i", PROTOCOL_VERSION, XASH_VERSION, Q_buildnum( ) ), CVAR_INIT, "shows an engine version" );
+	host_mapdesign_fatal = Cvar_Get( "host_mapdesign_fatal", "1", CVAR_ARCHIVE, "make map design errors fatal" );
+	host_xashds_hacks = Cvar_Get( "xashds_hacks", "0", 0, "hacks for xashds in singleplayer" );
 
 	// content control
 	Cvar_Get( "violence_hgibs", "1", CVAR_ARCHIVE, "show human gib entities" );
@@ -963,7 +1005,7 @@ int EXPORT Host_Main( int argc, const char **argv, const char *progname, int bCh
 
 	if( host.type != HOST_DEDICATED )
 	{
-		// when we in developer-mode automatically turn cheats on
+		// when we're in developer-mode, automatically turn cheats on
 		if( host.developer > 1 ) Cvar_SetFloat( "sv_cheats", 1.0f );
 		Cbuf_AddText( "exec video.cfg\n" );
 	}
@@ -975,8 +1017,8 @@ int EXPORT Host_Main( int argc, const char **argv, const char *progname, int bCh
 	// allow to change game from the console
 	if( pChangeGame != NULL )
 	{
-		Cmd_AddCommand( "game", Host_ChangeGame_f, "change game" );
-		Cvar_Get( "host_allow_changegame", "1", CVAR_READ_ONLY, "allows to change games" );
+		Cmd_AddCommand( "game", Host_ChangeGame_f, "change active game/mod" );
+		Cvar_Get( "host_allow_changegame", "1", CVAR_READ_ONLY, "whether changing game/mod is allowed" );
 	}
 	else
 	{
@@ -986,27 +1028,7 @@ int EXPORT Host_Main( int argc, const char **argv, const char *progname, int bCh
 	SV_Init();
 	CL_Init();
 
-	if( host.type == HOST_DEDICATED )
-	{
-		Con_InitConsoleCommands ();
-
-		Cmd_AddCommand( "quit", Sys_Quit, "quit the game" );
-		Cmd_AddCommand( "exit", Sys_Quit, "quit the game" );
-
-		// dedicated servers using settings from server.cfg file
-		Cbuf_AddText( va( "exec %s\n", Cvar_VariableString( "servercfgfile" )));
-		Cbuf_Execute();
-
-		Cbuf_AddText( va( "map %s\n", Cvar_VariableString( "defaultmap" )));
-	}
-	else
-	{
-		Cmd_AddCommand( "minimize", Host_Minimize_f, "minimize main window to tray" );
-		Cbuf_AddText( "exec config.cfg\n" );
-	}
-
-	host.errorframe = 0;
-	Cbuf_Execute();
+	HTTP_Init();
 
 	// post initializations
 	switch( host.type )
@@ -1022,25 +1044,64 @@ int EXPORT Host_Main( int argc, const char **argv, const char *progname, int bCh
 
 		Cbuf_Execute();
 		break;
+	case HOST_UNKNOWN:
+		break;
 	}
 
+	if( host.type == HOST_DEDICATED )
+	{
+		char *defaultmap;
+		Con_InitConsoleCommands ();
+
+		Cmd_AddCommand( "quit", Sys_Quit, "quit the game" );
+		Cmd_AddCommand( "exit", Sys_Quit, "quit the game" );
+
+		// dedicated servers are using settings from server.cfg file
+		Cbuf_AddText( va( "exec %s\n", Cvar_VariableString( "servercfgfile" )));
+		Cbuf_Execute();
+
+		defaultmap = Cvar_VariableString( "defaultmap" );
+		if( !defaultmap[0] )
+			Msg( "Please add \"defaultmap\" cvar with default map name to your server.cfg!\n" );
+		else
+			Cbuf_AddText( va( "map %s\n", defaultmap ));
+		Cvar_FullSet( "xashds_hacks", "0", CVAR_READ_ONLY );
+		NET_Config( true );
+	}
+	else
+	{
+		Cmd_AddCommand( "minimize", Host_Minimize_f, "minimize main window to taskbar" );
+		Cbuf_AddText( "exec config.cfg\n" );
+	}
+
+	host.errorframe = 0;
+	Cbuf_Execute();
+
 	host.change_game = false;	// done
-	Cmd_RemoveCommand( "setr" );	// remove potentially backdoor for change render settings
+	Cmd_RemoveCommand( "setr" );	// remove potential backdoor for changing renderer settings
 	Cmd_RemoveCommand( "setgl" );
 
 	// we need to execute it again here
 	Cmd_ExecuteString( "exec config.cfg\n", src_command );
+
+	// exec all files from userconfig.d 
+	Host_Userconfigd_f();
+
 	oldtime = Sys_DoubleTime();
+	IN_TouchInitConfig();
 	SCR_CheckStartupVids();	// must be last
 #ifdef XASH_SDL
 	SDL_StopTextInput(); // disable text input event. Enable this in chat/console?
-	SDL_Event event;
 #endif
+
+	if( host.state == HOST_INIT )
+		host.state = HOST_FRAME; // initialization is finished
+
 	// main window message loop
 	while( !host.crashed && !host.shutdown_issued )
 	{
 #ifdef XASH_SDL
-		while( SDL_PollEvent( &event ) )
+		while( !host.crashed && !host.shutdown_issued && SDL_PollEvent( &event ) )
 			SDLash_EventFilter( &event );
 #endif
 		newtime = Sys_DoubleTime ();
@@ -1063,29 +1124,40 @@ void EXPORT Host_Shutdown( void )
 	if( host.shutdown_issued ) return;
 	host.shutdown_issued = true;
 
-	if( host.state != HOST_ERR_FATAL ) host.state = HOST_SHUTDOWN; // prepare host to normal shutdown
-	if( !host.change_game ) Q_strncpy( host.finalmsg, "Server shutdown", sizeof( host.finalmsg ));
 
-	if( host.type == HOST_NORMAL )
-		Host_WriteConfig();
+	switch( host.state )
+	{
+	case HOST_INIT:
+	case HOST_CRASHED:
+	case HOST_ERR_FATAL:
+		if( host.type == HOST_NORMAL )
+			MsgDev( D_WARN, "Not shutting down normally (%d), skipping config save!\n", host.state );
+		if( host.state != HOST_ERR_FATAL)
+			host.state = HOST_SHUTDOWN;
+		break;
+	default:
+		if( host.type == HOST_NORMAL )
+		{
+			Host_WriteConfig();
+			IN_TouchWriteConfig();
+		}
+		host.state = HOST_SHUTDOWN; // prepare host to normal shutdown
+	}
+
+	if( !host.change_game )
+		Q_strncpy( host.finalmsg, "Server shutdown", sizeof( host.finalmsg ));
+
+	Log_Printf( "Server shutdown\n" );
+	Log_Close();
 
 	SV_Shutdown( false );
 	CL_Shutdown();
 
 	Mod_Shutdown();
 	NET_Shutdown();
+	HTTP_Shutdown();
+	Cmd_Shutdown();
 	Host_FreeCommon();
 	Con_DestroyConsole();
-
-#ifdef _WIN32
-	// restore filter	
-	if( host.oldFilter ) SetUnhandledExceptionFilter( host.oldFilter );
-}
-
-// main DLL entry point
-BOOL WINAPI DllMain( HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved )
-{
-	hCurrent = hinstDLL;
-	return TRUE;
-#endif
+	Sys_RestoreCrashHandler();
 }

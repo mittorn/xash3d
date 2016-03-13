@@ -156,8 +156,11 @@ void R_StudioInit( void )
 		pixelAspect *= (320.0f / 240.0f);
 	else pixelAspect *= (640.0f / 480.0f);
 
-	aliasXscale = (float)scr_width->integer / RI.refdef.fov_y;
-	aliasYscale = aliasXscale * pixelAspect;
+	if( RI.refdef.fov_y != 0 )
+	{
+		aliasXscale = (float)scr_width->integer / RI.refdef.fov_y;
+		aliasYscale = aliasXscale * pixelAspect;
+	}
 
 	Matrix3x4_LoadIdentity( g_aliastransform );
 	Matrix3x4_LoadIdentity( g_rotationmatrix );
@@ -388,7 +391,7 @@ pfnGetModelCounters
 static void pfnGetModelCounters( int **s, int **a )
 {
 	*s = &g_nStudioCount;
-	*a = &r_stats.c_studio_models_drawn;
+	*a = (int *)&r_stats.c_studio_models_drawn;
 }
 
 /*
@@ -640,9 +643,9 @@ StudioGetAnim
 mstudioanim_t *R_StudioGetAnim( model_t *m_pSubModel, mstudioseqdesc_t *pseqdesc )
 {
 	mstudioseqgroup_t	*pseqgroup;
+	fs_offset_t		filesize;
+	byte		*buf;
 	cache_user_t	*paSequences;
-	size_t		filesize;
-          byte		*buf;
 
 	ASSERT( m_pSubModel );	
 
@@ -659,7 +662,7 @@ mstudioanim_t *R_StudioGetAnim( model_t *m_pSubModel, mstudioseqdesc_t *pseqdesc
 	}
 
 	// check for already loaded
-	if( !Mod_CacheCheck(( cache_user_t *)&( paSequences[pseqdesc->seqgroup] )))
+	if( !paSequences[pseqdesc->seqgroup].data )
 	{
 		string	filepath, modelname, modelpath;
 
@@ -670,13 +673,15 @@ mstudioanim_t *R_StudioGetAnim( model_t *m_pSubModel, mstudioseqdesc_t *pseqdesc
 		Q_snprintf( filepath, sizeof( filepath ), "%s/%s%i%i.mdl", modelpath, modelname, pseqdesc->seqgroup / 10, pseqdesc->seqgroup % 10 );
 
 		buf = FS_LoadFile( filepath, &filesize, false );
-		if( !buf || !filesize ) Host_Error( "StudioGetAnim: can't load %s\n", filepath );
-		if( IDSEQGRPHEADER != *(uint *)buf ) Host_Error( "StudioGetAnim: %s is corrupted\n", filepath );
+		if( !buf || !filesize )
+			Host_Error( "StudioGetAnim: can't load %s\n", filepath );
+		else if( IDSEQGRPHEADER != *(uint *)buf )
+			Host_Error( "StudioGetAnim: %s is corrupted\n", filepath );
 
 		MsgDev( D_INFO, "loading: %s\n", filepath );
 			
 		paSequences[pseqdesc->seqgroup].data = Mem_Alloc( com_studiocache, filesize );
-		Q_memcpy( paSequences[pseqdesc->seqgroup].data, buf, filesize );
+		Q_memcpy( paSequences[pseqdesc->seqgroup].data, buf, (size_t)filesize );
 		Mem_Free( buf );
 	}
 
@@ -705,9 +710,9 @@ void R_StudioFxTransform( cl_entity_t *ent, matrix3x4 transform )
 		else if( !Com_RandomLong( 0, 49 ))
 		{
 			float	offset;
-			int	axis = Com_RandomLong( 0, 1 );
+			//int	axis = Com_RandomLong( 0, 1 );
 
-			if( axis == 1 ) axis = 2; // choose between x & z
+			//if( axis == 1 ) axis = 2; // choose between x & z
 			offset = Com_RandomFloat( -10.0f, 10.0f );
 			transform[Com_RandomLong( 0, 2 )][3] += offset;
 		}
@@ -736,7 +741,7 @@ StudioCalcBoneAdj
 void R_StudioCalcBoneAdj( float dadt, float *adj, const byte *pcontroller1, const byte *pcontroller2, byte mouthopen )
 {
 	mstudiobonecontroller_t	*pbonecontroller;
-	float			value;	
+	float			value = 0.0f;
 	int			i, j;
 
 	pbonecontroller = (mstudiobonecontroller_t *)((byte *)m_pStudioHeader + m_pStudioHeader->bonecontrollerindex);
@@ -1511,11 +1516,11 @@ void R_StudioDynamicLight( cl_entity_t *ent, alight_t *lightinfo )
 		for( i = 0; i < m_pStudioHeader->numbones; i++ )
 		{
 			vec3_t	vec, org;
-			float	dist, atten;
-				
+			float	atten;
+
 			Matrix3x4_OriginFromMatrix( g_lighttransform[i], org );
 			VectorSubtract( org, dl->origin, vec );
-			
+
 			dist = DotProduct( vec, vec );
 			atten = (dist / radius2 - 1) * -1;
 			if( atten < 0 ) atten = 0;
@@ -1528,7 +1533,7 @@ void R_StudioDynamicLight( cl_entity_t *ent, alight_t *lightinfo )
 				lightinfo->ambientlight += atten;
 				lightinfo->shadelight += atten;
 			}
-                                        
+
 			Matrix3x4_VectorIRotate( g_lighttransform[i], vec, plight->dlightvec[plight->numdlights][i] );
 			VectorScale( plight->dlightvec[plight->numdlights][i], atten, plight->dlightvec[plight->numdlights][i] );
 		}
@@ -1597,11 +1602,11 @@ void R_StudioEntityLight( alight_t *lightinfo )
 		for( i = 0; i < m_pStudioHeader->numbones; i++ )
 		{
 			vec3_t	vec, org;
-			float	dist, atten;
-				
+			float	atten;
+
 			Matrix3x4_OriginFromMatrix( g_lighttransform[i], org );
 			VectorSubtract( org, origin, vec );
-			
+
 			dist = DotProduct( vec, vec );
 			atten = (dist / radius2 - 1) * -1;
 			if( atten < 0 ) atten = 0;
@@ -1614,7 +1619,7 @@ void R_StudioEntityLight( alight_t *lightinfo )
 				lightinfo->ambientlight += atten;
 				lightinfo->shadelight += atten;
 			}
-                                        
+
 			Matrix3x4_VectorIRotate( g_lighttransform[i], vec, plight->elightvec[plight->numelights][i] );
 			VectorScale( plight->elightvec[plight->numelights][i], atten, plight->elightvec[plight->numelights][i] );
 		}
@@ -1926,7 +1931,7 @@ static void R_StudioDrawPoints( void )
 	mstudiotexture_t	*ptexture;
 	mstudiomesh_t	*pmesh;
 	short		*pskinref;
-	float		*av, *lv, *nv, scale;
+	float		*av, *lv, *nv, scale = 0.0f;
 
 	R_StudioSetupTextureHeader ();
 
@@ -2053,7 +2058,7 @@ static void R_StudioDrawPoints( void )
 			GL_Bind( GL_TEXTURE0, ptexture[pskinref[pmesh->skinref]].index );
 		}
 
-		while( i = *( ptricmds++ ))
+		while( ( i = *( ptricmds++ ) ) )
 		{
 			int	vertexState = 0;
 			qboolean	tri_strip;
@@ -2107,6 +2112,8 @@ static void R_StudioDrawPoints( void )
 
 				if( g_nFaceFlags & STUDIO_NF_CHROME || ( g_nForceFaceFlags & STUDIO_NF_CHROME ))
 					pglTexCoord2f( g_chrome[ptricmds[1]][0] * s, g_chrome[ptricmds[1]][1] * t );
+				else if( g_nFaceFlags & STUDIO_NF_UV_COORDS )
+					pglTexCoord2f( ptricmds[2] * (1.0f / 32768.0f), ptricmds[3] * (1.0f / 32768.0f));
 				else pglTexCoord2f( ptricmds[2] * s, ptricmds[3] * t );
 
 				if(!( g_nForceFaceFlags & STUDIO_NF_CHROME ))
@@ -2640,7 +2647,6 @@ void R_StudioDeformShadow( void )
 	VectorScale( g_mvShadowVec, dist2, g_mvShadowVec );
 
 	verts = g_xarrayverts[0];
-	numVerts = g_nNumArrayVerts;
 
 	for( numVerts = 0; numVerts < g_nNumArrayVerts; numVerts++, verts += 3 )
 	{
@@ -2752,7 +2758,7 @@ void R_StudioRenderFinal( void )
 	{
 		for( i = 0; i < m_pStudioHeader->numbodyparts; i++ )
 		{
-			R_StudioSetupModel( i, &m_pBodyPart, &m_pSubModel );
+			R_StudioSetupModel( i, (void **)&m_pBodyPart, (void **)&m_pSubModel );
 
 			GL_SetRenderMode( rendermode );
 			R_StudioDrawPoints();
@@ -2949,7 +2955,7 @@ R_StudioDrawPlayer
 static int R_StudioDrawPlayer( int flags, entity_state_t *pplayer )
 {
 	int	m_nPlayerIndex;
-	float	gaitframe, gaityaw;
+	float	gaitframe = 0.0f, gaityaw = 0.0f;
 	vec3_t	dir, prevgaitorigin;
 	alight_t	lighting;
 
@@ -3302,10 +3308,17 @@ void R_RunViewmodelEvents( void )
 	if( !Mod_Extradata( clgame.viewent.model ))
 		return;
 
+	if( cl_lw->value && cl.frame.local.client.viewmodel != cl.predicted_viewmodel )
+		return;
+
 	RI.currententity = &clgame.viewent;
 	RI.currentmodel = RI.currententity->model;
 	if( !RI.currentmodel ) return;
 
+	if( !cl.weaponstarttime )
+		cl.weaponstarttime = cl.time;
+	RI.currententity->curstate.animtime = cl.weaponstarttime;
+	RI.currententity->curstate.sequence = cl.weaponseq;
 	pStudioDraw->StudioDrawModel( STUDIO_EVENTS );
 
 	RI.currententity = NULL;
@@ -3332,6 +3345,9 @@ void R_DrawViewModel( void )
 	if( !Mod_Extradata( clgame.viewent.model ))
 		return;
 
+	if( cl_lw->value && cl.frame.local.client.viewmodel != cl.predicted_viewmodel )
+		return;
+
 	RI.currententity = &clgame.viewent;
 	RI.currentmodel = RI.currententity->model;
 	if( !RI.currentmodel ) return;
@@ -3344,7 +3360,13 @@ void R_DrawViewModel( void )
 	// backface culling for left-handed weapons
 	if( r_lefthand->integer == 1 || g_iBackFaceCull )
 		GL_FrontFace( !glState.frontFace );
-
+	RI.currententity->curstate.scale = 1.0f;
+	RI.currententity->curstate.frame = 0;
+	RI.currententity->curstate.framerate = 1.0f;
+	if( !cl.weaponstarttime )
+		cl.weaponstarttime = cl.time;
+	RI.currententity->curstate.animtime = cl.weaponstarttime;
+	RI.currententity->curstate.sequence = cl.weaponseq;
 	pStudioDraw->StudioDrawModel( STUDIO_RENDER );
 
 	// restore depth range
@@ -3383,7 +3405,7 @@ static void R_StudioLoadTexture( model_t *mod, studiohdr_t *phdr, mstudiotexture
 	// store some textures for remapping
 	if( !Q_strnicmp( ptexture->name, "DM_Base", 7 ) || !Q_strnicmp( ptexture->name, "remap", 5 ))
 	{
-		int	i, size;
+		int	i;
 		char	val[6];
 		byte	*pixels;
 
@@ -3466,8 +3488,8 @@ static void R_StudioLoadTexture( model_t *mod, studiohdr_t *phdr, mstudiotexture
 		Q_snprintf( texname, sizeof( texname ), "#%s/%s.mdl", mdlname, name );
 		ptexture->index = GL_LoadTexture( texname, (byte *)ptexture, size, flags, filter );
 	}
-	else MsgDev( D_NOTE, "loading HQ: %s\n", texname );
-  
+	else MsgDev( D_NOTE, "Loading HQ: %s\n", texname );
+
 	if( !ptexture->index )
 	{
 		MsgDev( D_WARN, "%s has null texture %s\n", mod->name, ptexture->name );

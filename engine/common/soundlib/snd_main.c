@@ -18,7 +18,7 @@ GNU General Public License for more details.
 // global sound variables
 sndlib_t	sound;
 
-void Sound_Reset( void )
+static void Sound_Reset( void )
 {
 	// reset global variables
 	sound.width = sound.rate = 0;
@@ -30,7 +30,7 @@ void Sound_Reset( void )
 	sound.size = 0;
 }
 
-wavdata_t *SoundPack( void )
+static wavdata_t *SoundPack( void )
 {
 	wavdata_t	*pack = Mem_Alloc( host.soundpool, sizeof( wavdata_t ));
 
@@ -59,7 +59,7 @@ wavdata_t *FS_LoadSound( const char *filename, const byte *buffer, size_t size )
           const char	*ext = FS_FileExtension( filename );
 	string		path, loadname;
 	qboolean		anyformat = true;
-	int		filesize = 0;
+	fs_offset_t		filesize = 0;
 	const loadwavfmt_t	*format;
 	byte		*f;
 
@@ -68,7 +68,7 @@ wavdata_t *FS_LoadSound( const char *filename, const byte *buffer, size_t size )
 
 	if( Q_stricmp( ext, "" ))
 	{
-		// we needs to compare file extension with list of supported formats
+		// we need to compare file extension with list of supported formats
 		// and be sure what is real extension, not a filename with dot
 		for( format = sound.loadformats; format && format->formatstring; format++ )
 		{
@@ -93,7 +93,7 @@ wavdata_t *FS_LoadSound( const char *filename, const byte *buffer, size_t size )
 			f = FS_LoadFile( path, &filesize, false );
 			if( f && filesize > 0 )
 			{
-				if( format->loadfunc( path, f, filesize ))
+				if( format->loadfunc( path, f, (size_t)filesize ))
 				{
 					Mem_Free(f); // release buffer
 					return SoundPack(); // loaded
@@ -145,7 +145,7 @@ void FS_FreeSound( wavdata_t *pack )
 ================
 FS_OpenStream
 
-open and reading basic info from sound stream 
+open and read basic info from sound stream 
 ================
 */
 stream_t *FS_OpenStream( const char *filename )

@@ -19,7 +19,9 @@ GNU General Public License for more details.
 #include "con_nprint.h"
 #include "ref_params.h"
 #include "pm_local.h"
-
+#ifdef XASH_SDL
+#include <SDL.h>
+#endif
 #define MAX_DUPLICATED_CHANNELS	4		// threshold for identical static channels (probably error)
 #define SND_CLIP_DISTANCE		(float)(GI->soundclip_dist)
 
@@ -49,6 +51,7 @@ convar_t		*snd_foliage_db_loss;
 convar_t		*snd_gain;
 convar_t		*snd_gain_max;
 convar_t		*snd_gain_min;
+convar_t		*snd_mute_losefocus;
 convar_t		*s_refdist;
 convar_t		*s_refdb;
 convar_t		*dsp_off;		// set to 1 to disable all dsp processing
@@ -356,9 +359,11 @@ already playing.
 channel_t *SND_PickStaticChannel( int entnum, sfx_t *sfx, const vec3_t pos )
 {
 	channel_t	*ch = NULL;
-	int	i, dupe = 0;
+	int	i;
 
-#if 1	
+#if 0	
+	int dupe = 0;
+
 	// TODO: remove this code when predicting is will be done
 	// check for duplicate sounds
 	for( i = 0; i < total_channels; i++ )
@@ -720,7 +725,7 @@ qboolean SND_CheckPHS( channel_t *ch )
 	{
 		leafnum = Mod_PointLeafnum( s_listener.origin ) - 1;
 
-		if( leafnum != -1 && (!(mask[leafnum>>3] & (1<<( leafnum & 7 )))))
+		if( leafnum != -1 && (!(mask[leafnum>>3] & (1U << ( leafnum & 7 )))))
 			return false;
 	}
 	return true;
@@ -1123,7 +1128,7 @@ void S_AmbientSound( const vec3_t pos, int ent, sound_t handle, float fvol, floa
 	channel_t	*ch;
 	wavdata_t	*pSource = NULL;
 	sfx_t	*sfx = NULL;
-	int	vol, fvox = 0;
+	int	vol;
 	float	radius = SND_RADIUS_MAX;
 	vec3_t	origin;		
 
@@ -1168,7 +1173,6 @@ void S_AmbientSound( const vec3_t pos, int ent, sound_t handle, float fvol, floa
 		Q_strncpy( ch->name, sfx->name, sizeof( ch->name ));
 		sfx = ch->sfx;
 		pSource = sfx->cache;
-		fvox = 1;
 	}
 	else
 	{
@@ -1652,7 +1656,7 @@ void S_Say_f( void )
 {
 	if( Cmd_Argc() == 1 )
 	{
-		Msg( "Usage: speak <soundfile\n" );
+		Msg( "Usage: speak <soundfile>\n" );
 		return;
 	}
 
@@ -1767,6 +1771,15 @@ qboolean S_Init( void )
 		MsgDev( D_INFO, "Audio: Disabled\n" );
 		return false;
 	}
+#ifdef XASH_SDL
+	if( SDL_Init( SDL_INIT_AUDIO ) )
+	{
+		MsgDev( D_ERROR, "Audio: SDL: %s \n", SDL_GetError() );
+		return false;
+	}
+#else
+	return false;
+#endif
 
 	s_volume = Cvar_Get( "volume", "0.7", CVAR_ARCHIVE, "sound volume" );
 	s_musicvolume = Cvar_Get( "musicvolume", "1.0", CVAR_ARCHIVE, "background music volume" );
@@ -1780,24 +1793,25 @@ qboolean S_Init( void )
 	snd_foliage_db_loss = Cvar_Get( "snd_foliage_db_loss", "4", 0, "foliage loss factor" ); 
 	snd_gain_max = Cvar_Get( "snd_gain_max", "1", 0, "gain maximal threshold" );
 	snd_gain_min = Cvar_Get( "snd_gain_min", "0.01", 0, "gain minimal threshold" );
+	snd_mute_losefocus = Cvar_Get( "snd_mute_losefocus", "1", CVAR_ARCHIVE, "silence the audio when game window loses focus" );
 	s_refdist = Cvar_Get( "s_refdist", "36", 0, "soundlevel reference distance" );
 	s_refdb = Cvar_Get( "s_refdb", "60", 0, "soundlevel refernce dB" );
 	snd_gain = Cvar_Get( "snd_gain", "1", 0, "sound default gain" );
 	s_cull = Cvar_Get( "s_cull", "0", CVAR_ARCHIVE, "cull sounds by geometry" );
-	s_test = Cvar_Get( "s_test", "0", 0, "engine developer cvar for quick testing new features" );
+	s_test = Cvar_Get( "s_test", "0", 0, "engine developer cvar for quick testing of new features" );
 	s_phs = Cvar_Get( "s_phs", "0", CVAR_ARCHIVE, "cull sounds by PHS" );
-	s_khz = Cvar_Get("s_khz", "44", CVAR_ARCHIVE, "set sampling frequency. Available values is 11, 22, 44, 48");
+	s_khz = Cvar_Get("s_khz", "44", CVAR_ARCHIVE, "set sampling frequency, available values are 11, 22, 44, 48");
 
-	Cmd_AddCommand( "play", S_Play_f, "playing a specified sound file" );
-	Cmd_AddCommand( "playvol", S_PlayVol_f, "playing a specified sound file with specified volume" );
+	Cmd_AddCommand( "play", S_Play_f, "play a specified sound file" );
+	Cmd_AddCommand( "playvol", S_PlayVol_f, "play a specified sound file with specified volume" );
 	Cmd_AddCommand( "stopsound", S_StopSound_f, "stop all sounds" );
-	Cmd_AddCommand( "music", S_Music_f, "starting a background track" );
+	Cmd_AddCommand( "music", S_Music_f, "start a background track" );
 	Cmd_AddCommand( "soundlist", S_SoundList_f, "display loaded sounds" );
 	Cmd_AddCommand( "s_info", S_SoundInfo_f, "print sound system information" );
 	Cmd_AddCommand( "+voicerecord", Cmd_Null_f, "start voice recording (non-implemented)" );
 	Cmd_AddCommand( "-voicerecord", Cmd_Null_f, "stop voice recording (non-implemented)" );
-	Cmd_AddCommand( "spk", S_SayReliable_f, "reliable play a specified sententce" );
-	Cmd_AddCommand( "speak", S_Say_f, "playing a specified sententce" );
+	Cmd_AddCommand( "spk", S_SayReliable_f, "reliable play of a specified sentence" );
+	Cmd_AddCommand( "speak", S_Say_f, "play a specified sentence" );
 
 	if( !SNDDMA_Init( host.hWnd ))
 	{
@@ -1830,10 +1844,15 @@ void S_Shutdown( void )
 	if( !dma.initialized ) return;
 
 	Cmd_RemoveCommand( "play" );
+	Cmd_RemoveCommand( "playvol" );
 	Cmd_RemoveCommand( "stopsound" );
 	Cmd_RemoveCommand( "music" );
 	Cmd_RemoveCommand( "soundlist" );
 	Cmd_RemoveCommand( "s_info" );
+	Cmd_RemoveCommand( "+voicerecord" );
+	Cmd_RemoveCommand( "-voicerecord" );
+	Cmd_RemoveCommand( "spk" );
+	Cmd_RemoveCommand( "speak" );
 
 	S_StopAllSounds ();
 	S_FreeSounds ();

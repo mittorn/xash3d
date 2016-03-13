@@ -305,7 +305,7 @@ void Con_CreateConsole( void )
 		rect.top = 0;
 		rect.bottom = 364;
 		Q_strncpy( FontName, "Fixedsys", sizeof( FontName ));
-		Q_strncpy( s_wcd.title, va( "Xash3D %g", XASH_VERSION ), sizeof( s_wcd.title ));
+		Q_strncpy( s_wcd.title, va( "Xash3D %s", XASH_VERSION ), sizeof( s_wcd.title ));
 		Q_strncpy( s_wcd.log_path, "engine.log", sizeof( s_wcd.log_path ));
 		fontsize = 8;
 	}
@@ -424,7 +424,7 @@ destroy win32 console
 void Con_DestroyConsole( void )
 {
 	// last text message into console or log 
-	MsgDev( D_NOTE, "Sys_FreeLibrary: Unloading xash.dll\n" );
+	MsgDev( D_NOTE, "Con_DestroyConsole: Exiting!\n" );
 
 	Sys_CloseLog();
 #ifdef _WIN32
@@ -512,9 +512,9 @@ void Sys_InitLog( void )
 	else mode = "w";
 
 	// print log to stdout
-	printf( "=================================================================================\n" );
+	printf( "================================================================================\n" );
 	printf( "\t%s (build %i) started at %s\n", s_wcd.title, Q_buildnum(), Q_timestamp( TIME_FULL ));
-	printf( "=================================================================================\n" );
+	printf( "================================================================================\n" );
 
 	s_wcd.logfileno = -1;
 	// create log if needed
@@ -524,9 +524,9 @@ void Sys_InitLog( void )
 		if( !s_wcd.logfile ) MsgDev( D_ERROR, "Sys_InitLog: can't create log file %s\n", s_wcd.log_path );
 		else s_wcd.logfileno = fileno( s_wcd.logfile );
 
-		fprintf( s_wcd.logfile, "=================================================================================\n" );
+		fprintf( s_wcd.logfile, "================================================================================\n" );
 		fprintf( s_wcd.logfile, "\t%s (build %i) started at %s\n", s_wcd.title, Q_buildnum(), Q_timestamp( TIME_FULL ));
-		fprintf( s_wcd.logfile, "=================================================================================\n" );
+		fprintf( s_wcd.logfile, "================================================================================\n" );
 	}
 }
 
@@ -549,19 +549,15 @@ void Sys_CloseLog( void )
 		break;
 	}
 
-	printf( "\n");
-	printf( "=================================================================================");
-	printf( "\n\t%s (build %i) %s at %s\n", s_wcd.title, Q_buildnum(), event_name, Q_timestamp( TIME_FULL ));
-	printf( "=================================================================================");
-
+	printf( "\n================================================================================\n");
+	printf( "\t%s (build %i) %s at %s\n", s_wcd.title, Q_buildnum(), event_name, Q_timestamp( TIME_FULL ));
+	printf( "================================================================================\n");
 
 	if( s_wcd.logfile )
 	{
-		fprintf( s_wcd.logfile, "\n");
-		fprintf( s_wcd.logfile, "=================================================================================");
-		fprintf( s_wcd.logfile, "\n\t%s (build %i) %s at %s\n", s_wcd.title, Q_buildnum(), event_name, Q_timestamp( TIME_FULL ));
-		fprintf( s_wcd.logfile, "=================================================================================");
-		if( host.change_game ) fprintf( s_wcd.logfile, "\n" ); // just for tabulate
+		fprintf( s_wcd.logfile, "\n================================================================================\n");
+		fprintf( s_wcd.logfile, "\t%s (build %i) %s at %s\n", s_wcd.title, Q_buildnum(), event_name, Q_timestamp( TIME_FULL ));
+		fprintf( s_wcd.logfile, "================================================================================\n");
 
 		fclose( s_wcd.logfile );
 		s_wcd.logfile = NULL;
@@ -570,15 +566,26 @@ void Sys_CloseLog( void )
 
 void Sys_PrintLog( const char *pMsg )
 {
+	time_t		crt_time;
+	const struct tm	*crt_tm;
+	char logtime[32];
+
 #ifdef __ANDROID__
 	__android_log_print( ANDROID_LOG_DEBUG, "Xash", "%s", pMsg );
 #endif
 
-	puts( pMsg );
+	time( &crt_time );
+	crt_tm = localtime( &crt_time );
+	strftime( logtime, sizeof( logtime ), "[%H:%M:%S]", crt_tm ); //short time
+
+	printf( "%s %s", logtime, pMsg );
 	fflush( stdout );
 
 	if( !s_wcd.logfile ) return;
-	fputs( pMsg, s_wcd.logfile );
+
+	strftime( logtime, sizeof( logtime ), "[%Y:%m:%d|%H:%M:%S]", crt_tm ); //full time
+
+	fprintf( s_wcd.logfile, "%s %s", logtime, pMsg );
 	fflush( s_wcd.logfile );
 }
 

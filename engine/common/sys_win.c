@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #include <dlfcn.h>
 #ifndef __ANDROID__
 extern char **environ;
+#include <pwd.h>
 #endif
 
 #else
@@ -58,6 +59,15 @@ double Sys_DoubleTime( void )
 	}
 	CurrentTime = SDL_GetPerformanceCounter();
 	return (double)( CurrentTime - g_ClockStart ) / (double)( g_PerformanceFrequency );
+#elif _WIN32
+	if( !g_PerformanceFrequency )
+	{
+		g_PerformanceFrequency = GetPerformanceFrequency();
+		g_ClockStart = GetPerformanceCounter();
+	}
+	CurrentTime = GetPerformanceCounter();
+	return (double)( CurrentTime - g_ClockStart ) / (double)( g_PerformanceFrequency );
+
 #else
 	struct timespec ts;
 	if( !g_PerformanceFrequency )
@@ -80,11 +90,16 @@ create buffer, that contain clipboard
 */
 char *Sys_GetClipboardData( void )
 {
+	static char data[1024] = "";
 #ifdef XASH_SDL
-	return SDL_GetClipboardText();
-#else
-	return 0;
+	char *buffer = SDL_GetClipboardText();
+	if( buffer )
+	{
+		Q_strncpy( data, buffer = SDL_GetClipboardText(), 1024 );
+		SDL_free( buffer );
+	}
 #endif
+	return data;
 }
 
 /*
@@ -97,7 +112,7 @@ write screenshot into clipboard
 void Sys_SetClipboardData( const byte *buffer, size_t size )
 {
 #ifdef XASH_SDL
-	SDL_SetClipboardText(buffer);
+	SDL_SetClipboardText((char *)buffer);
 #endif
 }
 
@@ -127,17 +142,23 @@ returns username for current profile
 */
 char *Sys_GetCurrentUser( void )
 {
-	static string	s_userName;
-	dword		size = sizeof( s_userName );
-
 #if defined(_WIN32)
-	if( !GetUserName( s_userName, &size ) || !s_userName[0] )
-#elif !defined(__ANDROID__)
-	if( !getlogin_r( s_userName, size || !s_userName[0] ) )
-#endif
-		Q_strcpy( s_userName, "player" );
+	static string	s_userName;
+	dword			size = sizeof( s_userName );
 
-	return s_userName;
+	if( GetUserName( s_userName, &size ))
+		return s_userName;
+	return "Player";
+#elif !defined(__ANDROID__)
+	uid_t uid = geteuid();
+	struct passwd *pw = getpwuid( uid );
+
+	if ( pw ) return pw->pw_name;
+
+	return "Player";
+#else
+	return "Player";
+#endif
 }
 
 /*
@@ -151,8 +172,11 @@ void Sys_ShellExecute( const char *path, const char *parms, qboolean shouldExit 
 	ShellExecute( NULL, "open", path, parms, NULL, SW_SHOW );
 #elif !defined __ANDROID__
 	//signal(SIGCHLD, SIG_IGN);
-	const char* xdgOpen = "/usr/bin/xdg-open"; //TODO: find xdg-open in PATH
-	
+	#if defined (__FreeBSD__) || defined (__NetBSD__) || defined(__OpenBSD__)
+		const char* xdgOpen = "/usr/local/bin/xdg-open"; //TODO: find xdg-open in PATH
+	#else
+		const char* xdgOpen = "/usr/bin/xdg-open";
+	#endif
 	const char* argv[] = {xdgOpen, path, NULL};
 	pid_t id = fork();
 	if (id == 0) {
@@ -183,11 +207,11 @@ void Sys_ParseCommandLine( int argc, const char** argv )
 
 	for( i = 0; i < host.argc; i++ )
 	{
-		// we wan't return to first game
+		// we don't want to return to first game
 		if( !Q_stricmp( "-game", host.argv[i] )) host.argv[i] = (char *)blank;
 		// probably it's timewaster, because engine rejected second change
 		if( !Q_stricmp( "+game", host.argv[i] )) host.argv[i] = (char *)blank;
-		// you sure what is map exists in new game?
+		// you sure that map exists in new game?
 		if( !Q_stricmp( "+map", host.argv[i] )) host.argv[i] = (char *)blank;
 		// just stupid action
 		if( !Q_stricmp( "+load", host.argv[i] )) host.argv[i] = (char *)blank;
@@ -384,6 +408,7 @@ void Sys_WaitForQuit( void )
 #endif
 }
 
+
 /*
 ================
 Sys_Crash
@@ -391,7 +416,10 @@ Sys_Crash
 Crash handler, called from system
 ================
 */
+#define DEBUG_BREAK
+/// TODO: implement on windows too
 #ifdef _WIN32
+LPTOP_LEVEL_EXCEPTION_FILTER       oldFilter;
 long _stdcall Sys_Crash( PEXCEPTION_POINTERS pInfo )
 {
 	// save config
@@ -418,14 +446,70 @@ long _stdcall Sys_Crash( PEXCEPTION_POINTERS pInfo )
 		Con_DestroyConsole();
 	}
 
-	if( host.oldFilter )
-		return host.oldFilter( pInfo );
+	if( oldFilter )
+		return oldFilter( pInfo );
 	return EXCEPTION_CONTINUE_EXECUTION;
 }
-#else //if !defined (__ANDROID__) // Android will have other handler
+
+void Sys_SetupCrashHandler( void )
+{
+	SetErrorMode( SEM_FAILCRITICALERRORS );	// no abort/retry/fail errors
+	oldFilter = SetUnhandledExceptionFilter( Sys_Crash );
+	host.hInst = GetModuleHandle( NULL );
+}
+
+void Sys_RestoreCrashHandler( void )
+{
+	// restore filter
+	if( oldFilter ) SetUnhandledExceptionFilter( oldFilter );
+}
+
+#elif defined (CRASHHANDLER)
 // Posix signal handler
+
+#if defined(__FreeBSD__) || defined(__NetBSD__)
+#define HAVE_UCONTEXT_H 1
+#endif
+
+#ifdef HAVE_UCONTEXT_H
 #include <ucontext.h>
+#endif
 #include <sys/mman.h>
+
+#ifdef GDB_BREAK
+#include <fcntl.h>
+qboolean Sys_DebuggerPresent( void )
+{
+    char buf[1024];
+    qboolean debugger_present = false;
+
+    int status_fd = open( "/proc/self/status", O_RDONLY );
+    if ( status_fd == -1 )
+        return 0;
+
+    ssize_t num_read = read( status_fd, buf, sizeof( buf ) );
+
+    if ( num_read > 0 )
+    {
+        static const char TracerPid[] = "TracerPid:";
+        char *tracer_pid;
+
+        buf[num_read] = 0;
+        tracer_pid    = Q_strstr( buf, TracerPid );
+        if ( tracer_pid )
+            debugger_present = !!Q_atoi( tracer_pid + sizeof( TracerPid ));
+    }
+
+    return debugger_present;
+}
+
+#undef DEBUG_BREAK
+#define DEBUG_BREAK \
+	if( Sys_DebuggerPresent() ) \
+		asm volatile("int $3;")
+		//raise( SIGINT )
+#endif
+
 int printframe( char *buf, int len, int i, void *addr )
 {
 	Dl_info dlinfo;
@@ -442,19 +526,33 @@ int printframe( char *buf, int len, int i, void *addr )
 		return snprintf( buf, len, "% 2d: %p\n", i, addr ); // print only address
 }
 
-void Sys_Crash( int signal, siginfo_t *si, void *context)
+struct sigaction oldFilter;
+
+static void Sys_Crash( int signal, siginfo_t *si, void *context)
 {
 	void *trace[32];
 	char message[1024], stackframe[256];
 	int len, stacklen, logfd, i = 0;
 	ucontext_t *ucontext = (ucontext_t*)context;
 #if __i386__
-	void *pc = (void*)ucontext->uc_mcontext.gregs[REG_EIP], **bp = (void**)ucontext->uc_mcontext.gregs[REG_EBP], **sp = (void**)ucontext->uc_mcontext.gregs[REG_ESP];
+	#ifdef __FreeBSD__
+		void *pc = (void*)ucontext->uc_mcontext.mc_eip, **bp = (void**)ucontext->uc_mcontext.mc_ebp, **sp = (void**)ucontext->uc_mcontext.mc_esp;
+	#elif __NetBSD__
+		void *pc = (void*)ucontext->uc_mcontext.__gregs[REG_EIP], **bp = (void**)ucontext->uc_mcontext.__gregs[REG_EBP], **sp = (void**)ucontext->uc_mcontext.__gregs[REG_ESP];
+	#elif __OpenBSD__
+		void *pc = (void*)sc_eip, **bp = (void**)sc_ebp, **sp = (void**)sc_esp;
+	#else
+		void *pc = (void*)ucontext->uc_mcontext.gregs[REG_EIP], **bp = (void**)ucontext->uc_mcontext.gregs[REG_EBP], **sp = (void**)ucontext->uc_mcontext.gregs[REG_ESP];
+	#endif
 #elif defined (__arm__) // arm not tested
 	void *pc = (void*)ucontext->uc_mcontext.arm_pc, **bp = (void*)ucontext->uc_mcontext.arm_r10, **sp = (void*)ucontext->uc_mcontext.arm_sp;
 #endif
 	// Safe actions first, stack and memory may be corrupted
-	len = snprintf(message, 1024, "Sys_Crash: signal %d, err %d with code %d at %p %p\n", signal, si->si_errno, si->si_code, si->si_addr, si->si_ptr);
+	#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+		len = snprintf(message, 1024, "Sys_Crash: signal %d, err %d with code %d at %p\n", signal, si->si_errno, si->si_code, si->si_addr);
+	#else
+		len = snprintf(message, 1024, "Sys_Crash: signal %d, err %d with code %d at %p %p\n", signal, si->si_errno, si->si_code, si->si_addr, si->si_ptr);
+	#endif
 	write(2, message, len);
 	// Flush buffers before writing directly to descriptors
 	fflush( stdout );
@@ -496,11 +594,11 @@ void Sys_Crash( int signal, siginfo_t *si, void *context)
 	// Put MessageBox as Sys_Error
 	Msg( message );
 #ifdef XASH_SDL
-	SDL_SetWindowGrab(host.hWnd, false);
+	SDL_SetWindowGrab( host.hWnd, SDL_FALSE );
 	//SDL_MouseQuit();
 	MSGBOX( message );
 #endif
-	// Log saved, now we can try save configs and close log correctly, it may crash
+	// Log saved, now we can try to save configs and close log correctly, it may crash
 	if( host.type == HOST_NORMAL )
 			CL_Crashed();
 	host.state = HOST_CRASHED;
@@ -508,6 +606,33 @@ void Sys_Crash( int signal, siginfo_t *si, void *context)
 	host.crashed = true;
 	Con_DestroyConsole();
 	Sys_Quit();
+}
+
+void Sys_SetupCrashHandler()
+{
+	struct sigaction act;
+	act.sa_sigaction = Sys_Crash;
+	act.sa_flags = SA_SIGINFO | SA_ONSTACK;
+	sigaction(SIGSEGV, &act, &oldFilter);
+	sigaction(SIGABRT, &act, &oldFilter);
+	sigaction(SIGBUS, &act, &oldFilter);
+	sigaction(SIGILL, &act, &oldFilter);
+}
+
+void Sys_RestoreCrashHandler( void )
+{
+	// stub
+}
+
+#else
+void Sys_SetupCrashHandler( void )
+{
+	// stub
+}
+
+void Sys_RestoreCrashHandler( void )
+{
+	// stub
 }
 #endif
 
@@ -523,11 +648,11 @@ void Sys_Error( const char *error, ... )
 {
 	va_list	argptr;
 	char	text[MAX_SYSPATH];
-         
+	DEBUG_BREAK;
 	if( host.state == HOST_ERR_FATAL )
-		return; // don't multiple executes
+		return; // don't execute more than once
 
-	// make sure what console received last message
+	// make sure that console received last message
 	if( host.change_game ) Sys_Sleep( 200 );
 
 	error_on_exit = true;
@@ -550,8 +675,9 @@ void Sys_Error( const char *error, ... )
 	{
 		Con_ShowConsole( true );
 		Con_DisableInput();	// disable input line for dedicated server
-		MSGBOX( text );
+
 		Sys_Print( text );	// print error message
+		MSGBOX( text );
 		Sys_WaitForQuit();
 	}
 	else
@@ -574,7 +700,7 @@ void Sys_Break( const char *error, ... )
 {
 	va_list	argptr;
 	char	text[MAX_SYSPATH];
-
+	DEBUG_BREAK;
 	if( host.state == HOST_ERR_FATAL )
 		return; // don't multiple executes
 
@@ -597,6 +723,7 @@ void Sys_Break( const char *error, ... )
 		Con_ShowConsole( true );
 		Con_DisableInput();	// disable input line for dedicated server
 		Sys_Print( text );
+		MSGBOX( text );
 		Sys_WaitForQuit();
 	}
 	else
@@ -614,7 +741,7 @@ Sys_Quit
 */
 void Sys_Quit( void )
 {
-	MsgDev(D_INFO, "Shutting down...");
+	MsgDev(D_INFO, "Shutting down...\n");
 	Host_Shutdown();
 	exit( error_on_exit );
 }
@@ -628,65 +755,82 @@ print into window console
 */
 void Sys_Print( const char *pMsg )
 {
-	const char	*msg;
-	char		buffer[32768];
-	char		logbuf[32768];
-	char		*b = buffer;
-	char		*c = logbuf;	
-	int		i = 0;
-
 	if( host.type == HOST_NORMAL )
 		Con_Print( pMsg );
-
-	// if the message is REALLY long, use just the last portion of it
-	if( Q_strlen( pMsg ) > sizeof( buffer ) - 1 )
-		msg = pMsg + Q_strlen( pMsg ) - sizeof( buffer ) + 1;
-	else msg = pMsg;
-
-	// copy into an intermediate buffer
-	while( msg[i] && (( b - buffer ) < sizeof( buffer ) - 1 ))
+#ifdef _WIN32
 	{
-		if( msg[i] == '\n' && msg[i+1] == '\r' )
+		const char	*msg;
+		char		buffer[32768];
+		char		logbuf[32768];
+		char		*b = buffer;
+		char		*c = logbuf;
+		int		i = 0;
+		// if the message is REALLY long, use just the last portion of it
+		if( Q_strlen( pMsg ) > sizeof( buffer ) - 1 )
+			msg = pMsg + Q_strlen( pMsg ) - sizeof( buffer ) + 1;
+		else msg = pMsg;
+
+		// copy into an intermediate buffer
+		while( msg[i] && (( b - buffer ) < sizeof( buffer ) - 1 ))
 		{
-			b[0] = '\r';
-			b[1] = '\n';
-			c[0] = '\n';
-			b += 2, c++;
+			if( msg[i] == '\n' && msg[i+1] == '\r' )
+			{
+				b[0] = '\r';
+				b[1] = '\n';
+				c[0] = '\n';
+				b += 2, c++;
+				i++;
+			}
+			else if( msg[i] == '\r' )
+			{
+				b[0] = '\r';
+				b[1] = '\n';
+				b += 2;
+			}
+			else if( msg[i] == '\n' )
+			{
+				b[0] = '\r';
+				b[1] = '\n';
+				c[0] = '\n';
+				b += 2, c++;
+			}
+			else if( msg[i] == '\35' || msg[i] == '\36' || msg[i] == '\37' )
+			{
+				i++; // skip console pseudo graph
+			}
+			else if( IsColorString( &msg[i] ))
+			{
+				i++; // skip color prefix
+			}
+			else
+			{
+				*b = *c = msg[i];
+				b++, c++;
+			}
 			i++;
 		}
-		else if( msg[i] == '\r' )
-		{
-			b[0] = '\r';
-			b[1] = '\n';
-			b += 2;
-		}
-		else if( msg[i] == '\n' )
-		{
-			b[0] = '\r';
-			b[1] = '\n';
-			c[0] = '\n';
-			b += 2, c++;
-		}
-		else if( msg[i] == '\35' || msg[i] == '\36' || msg[i] == '\37' )
-		{
-			i++; // skip console pseudo graph
-		}
-		else if( IsColorString( &msg[i] ))
-		{
-			i++; // skip color prefix
-		}
-		else
-		{
-			*b = *c = msg[i];
-			b++, c++;
-		}
-		i++;
+
+		*b = *c = 0; // cutoff garbage
+
+		Sys_PrintLog( logbuf );
+		Con_WinPrint( buffer );
 	}
-
-	*b = *c = 0; // cutoff garbage
-
-	Sys_PrintLog( logbuf );
-	Con_WinPrint( buffer );
+#else
+	Sys_PrintLog( pMsg );
+#endif
+	if( host.rd.target )
+	{
+		if(( Q_strlen( pMsg ) + Q_strlen( host.rd.buffer )) > ( host.rd.buffersize - 1 ))
+		{
+			if( host.rd.flush )
+			{
+				host.rd.flush( host.rd.address, host.rd.target, host.rd.buffer );
+				*host.rd.buffer = 0;
+			}
+		}
+		Q_strcat( host.rd.buffer, pMsg );
+		return;
+	}
 }
 
 /*

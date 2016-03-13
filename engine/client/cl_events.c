@@ -135,6 +135,19 @@ qboolean CL_FireEvent( event_info_t *ei )
 	if( !ei || !ei->index )
 		return false;
 
+	if( cl_trace_events->value > 0.0f )
+	{
+		MsgDev( D_INFO, "^3EVENT  %s AT %.2f %.2f %.2f\n"    // event name
+					"     %.2f %.2f\n" // float params
+					"     %i %i\n" // int params
+					"     %s %s\n", // bool params
+					cl.event_precache[ bound( 1, ei->index, MAX_EVENTS )], ei->args.origin[0], ei->args.origin[1], ei->args.origin[2],
+					ei->args.fparam1, ei->args.fparam2,
+					ei->args.iparam1, ei->args.iparam2,
+					ei->args.bparam1 ? "TRUE" : "FALSE", ei->args.bparam2 ? "TRUE" : "FALSE" );
+
+	}
+
 	// get the func pointer
 	for( i = 0; i < MAX_EVENTS; i++ )
 	{
@@ -176,7 +189,7 @@ void CL_FireEvents( void )
 	int		i;
 	event_state_t	*es;
 	event_info_t	*ei;
-	qboolean		success;
+	//qboolean		success;
 
 	es = &cl.events;
 
@@ -191,7 +204,8 @@ void CL_FireEvents( void )
 		if( ei->fire_time && ( ei->fire_time > cl.time ))
 			continue;
 
-		success = CL_FireEvent( ei );
+		//success = CL_FireEvent( ei );
+		CL_FireEvent( ei );
 
 		// zero out the remaining fields
 		CL_ResetEvent( ei );
@@ -336,7 +350,7 @@ void CL_ParseEvent( sizebuf_t *msg )
 	int		i, num_events;
 	int		packet_ent;
 	event_args_t	nullargs, args;
-	qboolean		has_update;
+	//qboolean		has_update;
 	entity_state_t	*state;
 	cl_entity_t	*pEnt;
 	float		delay;
@@ -350,7 +364,7 @@ void CL_ParseEvent( sizebuf_t *msg )
 	{
 		event_index = BF_ReadUBitLong( msg, MAX_EVENT_BITS );
 		Q_memset( &args, 0, sizeof( args ));
-		has_update = false;
+		//has_update = false;
 
 		if( BF_ReadOneBit( msg ))
 		{
@@ -359,7 +373,7 @@ void CL_ParseEvent( sizebuf_t *msg )
 			if( BF_ReadOneBit( msg ))
 			{
 				MSG_ReadDeltaEvent( msg, &nullargs, &args );
-				has_update = true;
+				//has_update = true;
 			}
 		}
 		else packet_ent = -1;
@@ -395,6 +409,12 @@ void CL_ParseEvent( sizebuf_t *msg )
 				args.angles[PITCH] = -state->angles[PITCH] * 3;
 				args.angles[YAW] = state->angles[YAW];
 				args.angles[ROLL] = 0; // no roll
+
+				// if we restore origin and velocity everytime, why don't do it here also?
+				if( VectorIsNull( args.origin ))
+					VectorCopy( state->origin, args.origin );
+				if( VectorIsNull( args.velocity ))
+					VectorCopy( state->velocity, args.velocity );
 			}
 		}
 		else if( state )
@@ -450,6 +470,7 @@ void CL_PlaybackEvent( int flags, const edict_t *pInvoker, word eventindex, floa
 		return;		
 	}
 
+
 	flags |= FEV_CLIENT; // it's a client event
 	flags &= ~(FEV_NOTHOST|FEV_HOSTONLY|FEV_GLOBAL);
 
@@ -460,10 +481,10 @@ void CL_PlaybackEvent( int flags, const edict_t *pInvoker, word eventindex, floa
 	args.entindex = invokerIndex;
 
 // TODO: restore checks when predicting will be done
-//	if( !angles || VectorIsNull( angles ))
+	//if( !angles || VectorIsNull( angles ))
 		VectorCopy( cl.refdef.cl_viewangles, args.angles );
 
-//	if( !origin || VectorIsNull( origin ))
+	//if( !origin || VectorIsNull( origin ))
 		VectorCopy( cl.frame.local.client.origin, args.origin );
 
 	VectorCopy( cl.frame.local.client.velocity, args.velocity );

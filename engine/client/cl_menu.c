@@ -22,6 +22,7 @@ GNU General Public License for more details.
 #include "events.h"
 
 static MENUAPI	GetMenuAPI;
+static ADDTOUCHBUTTONTOLIST pfnAddTouchButtonToList;
 static void UI_UpdateUserinfo( void );
 
 menu_static_t	menu;
@@ -48,6 +49,16 @@ void UI_MouseMove( int x, int y )
 void UI_SetActiveMenu( qboolean fActive )
 {
 	movie_state_t	*cin_state;
+
+	if( host_xashds_hacks->value )
+	{
+		if( !cl.refdef.paused && !cls.changelevel && fActive )
+		{
+			Cbuf_InsertText("pause\n");
+			Cbuf_Execute();
+		}
+	}
+
 
 	if( !menu.hInstance )
 	{
@@ -625,6 +636,20 @@ static void UI_DrawSetTextColor( int r, int g, int b, int alpha )
 	menu.ds.textColor[2] = b;
 	menu.ds.textColor[3] = alpha;
 }
+/*
+=======================
+UI_AddTouchButtonToList
+
+send button parameters to menu
+=======================
+*/
+void UI_AddTouchButtonToList( const char *name, const char *texture, const char *command, unsigned char *color, int flags )
+{
+	if( pfnAddTouchButtonToList )
+	{
+		pfnAddTouchButtonToList( name, texture, command, color, flags );
+	}
+}
 
 /*
 ====================
@@ -799,7 +824,10 @@ pointer must be released in call place
 */
 static char *pfnGetClipboardData( void )
 {
-	return Sys_GetClipboardData();
+	char *cb, *copy; 
+	cb = Sys_GetClipboardData();
+	copy = copystring( cb );
+	return copy;
 }
 
 /*
@@ -810,16 +838,20 @@ pfnCheckGameDll
 */
 int pfnCheckGameDll( void )
 {
-	void	*hInst;
+	//void	*hInst;
 
-	if( SV_Active( )) return true;
+	//if( SV_Active( )) return true;
 
+	// UCyborg: Does this have issues? I see it's used
+	// to grey out menu options to start new game if
+	// server library can't be loaded. Commented out the
+	// rest with double slashes so compiler doesn't complain.
 	/*if(( hInst = Com_LoadLibrary( GI->game_dll, true )) != NULL )
 	{
 		Com_FreeLibrary( hInst );
 		return true;
 	}*/ return true;
-	return false;
+	//return false;
 }
 
 /*
@@ -869,21 +901,14 @@ pfnStartBackgroundTrack
 static void pfnStartBackgroundTrack( const char *introTrack, const char *mainTrack )
 {
 	S_StartBackgroundTrack( introTrack, mainTrack, 0 );
-
-	// HACKHACK to remove glitches from background track while new game is started.
-	if( !introTrack && !mainTrack )
-	{
-		S_Activate( 0, host.hWnd );
-		S_Activate( 1, host.hWnd );
-	}
 }
 
-#ifndef XASH_SDL
 static void pfnEnableTextInput( int enable )
 {
-	// stub
-}
+#ifdef XASH_SDL
+	SDLash_EnableTextInput( enable );
 #endif
+}
 
 // engine callbacks
 static ui_enginefuncs_t gEngfuncs = 
@@ -968,11 +993,14 @@ static ui_enginefuncs_t gEngfuncs =
 	pfnIsMapValid,
 	GL_ProcessTexture,
 	COM_CompareFileTime,
-	#ifdef XASH_SDL
-	SDLash_EnableTextInput
-	#else
-	pfnEnableTextInput
-	#endif
+};
+
+static ui_textfuncs_t gTextfuncs =
+{
+	pfnEnableTextInput,
+	Con_UtfProcessChar,
+	Con_UtfMoveLeft,
+	Con_UtfMoveRight
 };
 
 void UI_UnloadProgs( void )
@@ -990,37 +1018,38 @@ void UI_UnloadProgs( void )
 qboolean UI_LoadProgs( void )
 {
 	static ui_enginefuncs_t	gpEngfuncs;
+	static ui_textfuncs_t	gpTextfuncs;
 	static ui_globalvars_t	gpGlobals;
 	int			i;
-
+        UITEXTAPI GiveTextApi;
 	if( menu.hInstance ) UI_UnloadProgs();
 
 	// setup globals
 	menu.globals = &gpGlobals;
-
+#if defined (__ANDROID__)
+	char menulib[256];
+	Q_snprintf( menulib, 256, "%s/%s", getenv("XASH3D_GAMELIBDIR"), MENUDLL );
+	if(!( menu.hInstance = Com_LoadLibrary( menulib, false )))
+	{
+		Q_snprintf( menulib, 256, "%s/%s", getenv("XASH3D_ENGLIBDIR"), MENUDLL );
+		if(!( menu.hInstance = Com_LoadLibrary( menulib, false )))
+			return false;
+	}
+#else
 	if(!( menu.hInstance = Com_LoadLibrary( va( "%s/" MENUDLL, GI->dll_path ), false )))
 	{
 		FS_AllowDirectPaths( true );
 
-#ifdef _WIN32
-		if(!( menu.hInstance = Com_LoadLibrary( "../" MENUDLL, false )))
-#elif defined (__ANDROID__)
-		char menulib[256];
-		Q_strncpy( menulib, getenv("XASH3D_ENGLIBDIR"), 256 );
-		Q_strncat( menulib, "/" MENUDLL, 256 );
-		if(!( menu.hInstance = Com_LoadLibrary( menulib, false )))
-#else
-		// Attempt to try finding library by libdl magic on Linux
-		if(!( menu.hInstance = Com_LoadLibrary( MENUDLL, false )))
-#endif
+		if(!( menu.hInstance = Com_LoadLibrary( "../" MENUDLL, false ))
+				&& !( menu.hInstance = Com_LoadLibrary( MENUDLL, false )))
+
 		{
 			FS_AllowDirectPaths( false );
 			return false;
 		}
-
-		FS_AllowDirectPaths( false );
 	}
-
+#endif
+	FS_AllowDirectPaths( false );
 	if(!( GetMenuAPI = (MENUAPI)Com_GetProcAddress( menu.hInstance, "GetMenuAPI" )))
 	{
 		Com_FreeLibrary( menu.hInstance );
@@ -1042,6 +1071,18 @@ qboolean UI_LoadProgs( void )
 		menu.hInstance = NULL;
 		return false;
 	}
+
+	menu.use_text_api = false;
+
+	if( ( GiveTextApi = (UITEXTAPI)Com_GetProcAddress( menu.hInstance, "GiveTextAPI" ) ) )
+	{
+		// make local copy of engfuncs to prevent overwrite it with user dll
+		Q_memcpy( &gpTextfuncs, &gTextfuncs, sizeof( gpTextfuncs ));
+		if( GiveTextApi( &gpTextfuncs ) )
+			menu.use_text_api = true;
+	}
+
+	pfnAddTouchButtonToList = (ADDTOUCHBUTTONTOLIST)Com_GetProcAddress( menu.hInstance, "AddTouchButtonToList" );
 
 	// setup gameinfo
 	for( i = 0; i < SI.numgames; i++ )

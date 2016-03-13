@@ -168,6 +168,7 @@ typedef struct
 	int		acontTexture;
 	int		defaultTexture;   	// use for bad textures
 	int		particleTexture;	// particle texture
+	int		oldParticleTexture;	// square particle texture
 	int		particleTexture2;	// unsmoothed particle texture
 	int		solidskyTexture;	// quake1 solid-sky layer
 	int		alphaskyTexture;	// quake1 alpha-sky layer
@@ -407,7 +408,7 @@ void GL_ResetFogColor( void );
 // gl_sprite.c
 //
 void R_SpriteInit( void );
-void Mod_LoadSpriteModel( model_t *mod, const void *buffer, qboolean *loaded, uint texFlags );
+void Mod_LoadSpriteModel( model_t *mod, byte *buffer, qboolean *loaded, uint texFlags );
 mspriteframe_t *R_GetSpriteFrame( const model_t *pModel, int frame, float yaw );
 void R_DrawSpriteModel( cl_entity_t *e );
 
@@ -424,7 +425,7 @@ void R_DrawStudioModel( cl_entity_t *e );
 //
 // gl_warp.c
 //
-void R_InitSky( struct mip_s *mt, struct texture_s *tx );
+void R_InitSky( struct mip_s *mt, byte *buf, struct texture_s *tx );
 void R_AddSkyBoxSurface( msurface_t *fa );
 void R_ClearSkyBox( void );
 void R_DrawSkyBox( void );
@@ -585,8 +586,11 @@ typedef struct
 	int		depth_bits;
 	int		stencil_bits;
 
+	qboolean		softwareGammaUpdate;
 	qboolean		deviceSupportsGamma;
 	int		prev_mode;
+	int		prev_height;
+	int		prev_width;
 } glconfig_t;
 
 typedef struct
@@ -662,6 +666,8 @@ extern convar_t	*gl_nosort;
 extern convar_t	*gl_clear;
 extern convar_t	*gl_test;		// cvar to testify new effects
 
+extern convar_t	*r_ypos;
+extern convar_t	*r_xpos;
 extern convar_t	*r_width;
 extern convar_t	*r_height;
 extern convar_t	*r_speeds;

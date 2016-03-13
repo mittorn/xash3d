@@ -32,10 +32,9 @@ so it can unlock and free the data block after it has been played.
 convar_t		*s_primary;
 convar_t		*s_khz;
 dma_t			dma;
-int				shutdown_temp = 0;
 
-static qboolean	snd_firsttime = true;
-static qboolean	primary_format_set;
+//static qboolean	snd_firsttime = true;
+//static qboolean	primary_format_set;
 
 #ifdef XASH_SDL
 void SDL_SoundCallback( void* userdata, Uint8* stream, int len)
@@ -75,7 +74,7 @@ qboolean SNDDMA_Init( void *hInst )
 		return false;
 	}
 
-	memset(&desired, 0, sizeof(desired));
+	Q_memset(&desired, 0, sizeof(desired));
 	switch (s_khz->integer) {
 	case 48:
 		desired.freq = 48000;
@@ -248,18 +247,4 @@ void S_PrintDeviceName( void )
 #ifdef XASH_SDL
 	Msg( "Audio: SDL (driver: %s)\n", SDL_GetCurrentAudioDriver() );
 #endif
-}
-
-/*
-===========
-S_Activate
-
-Called when the main window gains or loses focus.
-The window have been destroyed and recreated
-between a deactivate and an activate.
-===========
-*/
-void S_Activate( qboolean active, void *hInst )
-{
-	shutdown_temp = active;
 }

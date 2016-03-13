@@ -785,24 +785,8 @@ static void R_SetupFrame( void )
 {
 	vec3_t	viewOrg, viewAng;
 
-	if( RP_NORMALPASS() && cl.thirdperson )
-	{
-		vec3_t	cam_ofs, vpn;
-
-		clgame.dllFuncs.CL_CameraOffset( cam_ofs );
-
-		viewAng[PITCH] = cam_ofs[PITCH];
-		viewAng[YAW] = cam_ofs[YAW];
-		viewAng[ROLL] = 0;
-
-		AngleVectors( viewAng, vpn, NULL, NULL );
-		VectorMA( RI.refdef.vieworg, -cam_ofs[ROLL], vpn, viewOrg );
-	}
-	else
-	{
-		VectorCopy( RI.refdef.vieworg, viewOrg );
-		VectorCopy( RI.refdef.viewangles, viewAng );
-	}
+	VectorCopy( RI.refdef.vieworg, viewOrg );
+	VectorCopy( RI.refdef.viewangles, viewAng );
 
 	// build the transformation matrix for the given view angles
 	VectorCopy( viewOrg, RI.vieworg );
@@ -1216,7 +1200,7 @@ void R_RenderScene( const ref_params_t *fd )
 	RI.refdef = *fd;
 
 	if( !cl.worldmodel && RI.drawWorld )
-		Host_Error( "R_RenderView: NULL worldmodel\n" );
+		Host_Error( "R_RenderScene: NULL worldmodel\n" );
 
 	R_PushDlights();
 
@@ -1245,6 +1229,8 @@ R_BeginFrame
 */
 void R_BeginFrame( qboolean clearScene )
 {
+	glConfig.softwareGammaUpdate = false;	// in case of possible fails
+
 	if(( gl_clear->integer || gl_overview->integer ) && clearScene && cls.state != ca_cinematic )
 	{
 		pglClear( GL_COLOR_BUFFER_BIT );
@@ -1261,8 +1247,10 @@ void R_BeginFrame( qboolean clearScene )
 		}
 		else
 		{
+			glConfig.softwareGammaUpdate = true;
 			BuildGammaTable( vid_gamma->value, vid_texgamma->value );
 			GL_RebuildLightmaps();
+			glConfig.softwareGammaUpdate = false;
 		}
 	}
 
@@ -1353,9 +1341,6 @@ void R_EndFrame( void )
 {
 	// flush any remaining 2D bits
 	R_Set2DMode( false );
-#ifdef __ANDROID__
-	Android_DrawControls();
-#endif
 #ifdef XASH_SDL
 	SDL_GL_SwapWindow(host.hWnd);
 #elif defined __ANDROID__ // For direct android backend
@@ -1478,6 +1463,8 @@ static int GL_RenderGetParm( int parm, int arg )
 		return GL_MaxTextureUnits();
 	case PARM_CLIENT_ACTIVE:
 		return (cls.state == ca_active);
+	case PARM_REBUILD_GAMMA:
+		return glConfig.softwareGammaUpdate;
 	}
 	return 0;
 }

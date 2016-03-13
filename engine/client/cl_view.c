@@ -36,7 +36,6 @@ void V_SetupRefDef( void )
 	clent = CL_GetLocalPlayer ();
 
 	clgame.entities->curstate.scale = clgame.movevars.waveHeight;
-	VectorCopy( cl.frame.local.client.punchangle, cl.refdef.punchangle );
 	clgame.viewent.curstate.modelindex = cl.frame.local.client.viewmodel;
 	clgame.viewent.model = Mod_Handle( clgame.viewent.curstate.modelindex );
 	clgame.viewent.curstate.number = cl.playernum + 1;
@@ -82,8 +81,10 @@ void V_SetupRefDef( void )
 	cl.refdef.viewport[0] = (scr_width->integer - cl.refdef.viewport[2]) / 2;
 	cl.refdef.viewport[1] = (scr_height->integer - sb_lines - cl.refdef.viewport[3]) / 2;
 
+	if( cl.scr_fov < 1.0f || cl.scr_fov> 170.0f )
+		cl.scr_fov = 90.0f;
 	// calc FOV
-	cl.refdef.fov_x = cl.data.fov; // this is a final fov value
+	cl.refdef.fov_x = cl.scr_fov; // this is a final fov value
 	cl.refdef.fov_y = V_CalcFov( &cl.refdef.fov_x, cl.refdef.viewport[2], cl.refdef.viewport[3] );
 
 	// adjust FOV for widescreen
@@ -95,12 +96,14 @@ void V_SetupRefDef( void )
 		VectorCopy( cl.predicted_origin, cl.refdef.simorg );
 		VectorCopy( cl.predicted_velocity, cl.refdef.simvel );
 		VectorCopy( cl.predicted_viewofs, cl.refdef.viewheight );
+		VectorCopy( cl.predicted_punchangle, cl.refdef.punchangle );
 	}
 	else
 	{
 		VectorCopy( cl.frame.local.client.origin, cl.refdef.simorg );
 		VectorCopy( cl.frame.local.client.view_ofs, cl.refdef.viewheight );
 		VectorCopy( cl.frame.local.client.velocity, cl.refdef.simvel );
+		VectorCopy( cl.frame.local.client.punchangle, cl.refdef.punchangle );
 	}
 }
 
@@ -269,12 +272,13 @@ void V_ProcessShowTexturesCmds( usercmd_t *cmd )
 {
 	static int	oldbuttons;
 	int		changed;
-	int		pressed, released;
+	int		released;
+	//int		pressed;
 
 	if( !gl_showtextures->integer ) return;
 
 	changed = (oldbuttons ^ cmd->buttons);
-	pressed =  changed & cmd->buttons;
+	//pressed =  changed & cmd->buttons;
 	released = changed & (~cmd->buttons);
 
 	if( released & ( IN_RIGHT|IN_MOVERIGHT ))
@@ -398,17 +402,22 @@ void V_PostRender( void )
 	case scrshot_snapshot:
 		draw_2d = true;
 		break;
+	default:
+		break;
 	}
 
 	if( draw_2d )
 	{
+		IN_TouchDraw();
 		SCR_RSpeeds();
 		SCR_NetSpeeds();
 		SCR_DrawFPS();
+		SCR_DrawPos();
 		SV_DrawOrthoTriangles();
 		CL_DrawDemoRecording();
 		R_ShowTextures();
 		CL_DrawHUD( CL_CHANGELEVEL );
+		
 		Con_DrawConsole();
 		UI_UpdateMenu( host.realtime );
 		Con_DrawVersion();

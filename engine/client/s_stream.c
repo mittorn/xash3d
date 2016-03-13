@@ -139,7 +139,7 @@ S_StreamGetCurrentState
 save\restore code
 =================
 */
-qboolean S_StreamGetCurrentState( char *currentTrack, char *loopTrack, int *position )
+qboolean S_StreamGetCurrentState( char *currentTrack, char *loopTrack, fs_offset_t *position )
 {
 	if( !s_bgTrack.stream )
 		return false; // not active
@@ -221,7 +221,6 @@ void S_StreamBackgroundTrack( void )
 
 		if( r < fileBytes )
 		{
-			fileBytes = r;
 			fileSamples = r / ( info->width * info->channels );
 		}
 
@@ -317,11 +316,10 @@ void S_StreamSoundTrack( void )
 		}
 
 		// read audio stream
-		r = SCR_GetAudioChunk( raw, fileBytes );
+		r = SCR_GetAudioChunk( (char *)raw, fileBytes );
 
 		if( r < fileBytes )
 		{
-			fileBytes = r;
 			fileSamples = r / ( info->width * info->channels );
 		}
 

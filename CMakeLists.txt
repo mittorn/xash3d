@@ -30,7 +30,6 @@ project (XASH3D)
 set (XASH3D_VERSION 0.15)
 set (HL_SDK_DIR /opt/halflife CACHE PATH "Half Life 1 SDK directory")
 
-option(PANDORA "Set to ON if targeting an OpenPandora device." ${PANDORA})
 option(XASH_DEDICATED "Enable dedicated build." ${XASH_DEDICATED})
 option(XASH_DLL_LOADER "Enable DLL loading on x86 Linux." ${XASH_DLL_LOADER})
 option(XASH_IPX "Enable IPX support for networking. Windows only." ${XASH_IPX})
@@ -44,11 +43,26 @@ option(XASH_X11 "Enable X11 support." ${XASH_VGUI})
 # MAIN BUILD CODE \
 ###################\
 
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
+
 # Build 32-bit Xash on 64-bit, because Xash3D not support this
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
 	set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32")
 	set (CMAKE_C_FLAGS "${CMAKE_CXX_FLAGS} -m32")
 	set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_CXX_FLAGS} -m32")
+	if(NOT DEFINED LIB_SUFFIX) 
+		set (LIB_SUFFIX "32")
+	endif()
+endif()
+
+if(NOT DEFINED LIB_INSTALL_DIR)
+    set(LIB_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/lib${LIB_SUFFIX}")
+endif()
+if(NOT DEFINED LIBEXEC_INSTALL_DIR)
+    set(LIBEXEC_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/libexec")
+endif()
+if(NOT DEFINED BIN_INSTALL_DIR)
+    set(BIN_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/bin")
 endif()
 
 if(NOT XASH_DEDICATED)
@@ -62,3 +76,8 @@ if(XASH_VGUI)
 endif()
 add_subdirectory (engine)
 add_subdirectory (game_launch)
+
+install(FILES "xash3d.sh"
+    DESTINATION ${BIN_INSTALL_DIR}
+    RENAME "xash3d"
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)

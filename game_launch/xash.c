@@ -21,12 +21,17 @@ GNU General Public License for more details.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#if _MSC_VER == 1200
+#define true 1
+#define false 0
+#else
 #include <stdbool.h>
+#endif
 #ifdef __APPLE__
  #include <dlfcn.h>
  #include <errno.h>
- #define XASHLIB                "xash.dylib"
- #define LoadLibrary(x)          dlopen(x, RTLD_LAZY)
+ #define XASHLIB                "libxash.dylib"
+ #define dlmount(x)          dlopen(x, RTLD_LAZY)
  #define FreeLibrary(x)          dlclose(x)
  #define GetProcAddress(x, y)    dlsym(x, y)
  #define HINSTANCE               void*
@@ -40,7 +45,11 @@ GNU General Public License for more details.
  #define dlmount(x) LoadLibraryA(x)
  #define dlclose(x) FreeLibrary(x)
  #define dlsym(x,y) GetProcAddress(x,y)
- #define XASHLIB                 "xash.dll"
+#ifdef XASH_SDL
+ #define XASHLIB                 "xash_sdl.dll"
+#else
+ #define XASHLIB                 "xash_dedicated.dll"
+#endif
  #include "windows.h" 
 #endif
 
@@ -57,7 +66,7 @@ int szArgc;
 char **szArgv;
 HINSTANCE	hEngine;
 
-void Sys_Error( const char *errorstring )
+void Xash_Error( const char *errorstring )
 {
 #ifdef XASH_SDL
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Xash Error", errorstring, NULL);
@@ -73,7 +82,7 @@ void Sys_LoadEngine( void )
 #ifndef _WIN32
 		printf("%s\n", dlerror());
 #endif
-		Sys_Error( "Unable to load the " XASHLIB );
+		Xash_Error( "Unable to load the " XASHLIB );
 	}
 
 	if(( Xash_Main = (pfnInit)dlsym( hEngine, "Host_Main" )) == NULL )
@@ -81,7 +90,7 @@ void Sys_LoadEngine( void )
 #ifndef _WIN32
 		printf("%s\n", dlerror());
 #endif
-		Sys_Error( XASHLIB " missed 'Host_Main' export" );
+		Xash_Error( XASHLIB " missed 'Host_Main' export" );
 	}
 
 	// this is non-fatal for us but change game will not working
@@ -99,8 +108,8 @@ void Sys_UnloadEngine( void )
 
 void Sys_ChangeGame( const char *progname )
 {
-	if( !progname || !progname[0] ) Sys_Error( "Sys_ChangeGame: NULL gamedir" );
-	if( Xash_Shutdown == NULL ) Sys_Error( "Sys_ChangeGame: missed 'Host_Shutdown' export\n" );
+	if( !progname || !progname[0] ) Xash_Error( "Sys_ChangeGame: NULL gamedir" );
+	if( Xash_Shutdown == NULL ) Xash_Error( "Sys_ChangeGame: missed 'Host_Shutdown' export\n" );
 	strncpy( szGameDir, progname, sizeof( szGameDir ) - 1 );
 
 	Sys_UnloadEngine ();
@@ -108,17 +117,17 @@ void Sys_ChangeGame( const char *progname )
 
 	Xash_Main( szArgc, szArgv, szGameDir, true, ( Xash_Shutdown != NULL ) ? Sys_ChangeGame : NULL );
 }
-#if 0
+#if _MSC_VER == 1200
 int __stdcall WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdLine, int nShow)
 #else // _WIN32
 int main( int argc, char **argv )
 #endif
 {
 
-#if 0
+#if _MSC_VER == 1200
 	LPWSTR* lpArgv = CommandLineToArgvW(GetCommandLineW(), &szArgc);
-	szArgv = (char**)malloc(szArgc*sizeof(char*));
 	int size, i = 0;
+	szArgv = (char**)malloc(szArgc*sizeof(char*));
 	for (; i < szArgc; ++i)
 	{
 		size = wcslen(lpArgv[i]) + 1;

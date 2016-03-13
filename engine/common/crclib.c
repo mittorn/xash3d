@@ -110,7 +110,7 @@ void CRC32_ProcessByte( dword *pulCRC, byte ch )
 
 void CRC32_ProcessBuffer( dword *pulCRC, const void *pBuffer, int nBuffer )
 {
-	dword	ulCrc = *pulCRC;
+	dword	poolpb, ulCrc = *pulCRC;
 	byte	*pb = (byte *)pBuffer;
 	uint	nFront;
 	int	nMain;
@@ -121,7 +121,8 @@ JustAfew:
 	case 6: ulCrc  = crc32table[*pb++ ^ (byte)ulCrc] ^ (ulCrc >> 8);
 	case 5: ulCrc  = crc32table[*pb++ ^ (byte)ulCrc] ^ (ulCrc >> 8);
 	case 4:
-		ulCrc ^= *(dword *)pb;	// warning, this only works on little-endian.
+		Q_memcpy( &poolpb, pb, sizeof(dword));
+		ulCrc ^= poolpb;	// warning, this only works on little-endian.
 		ulCrc  = crc32table[(byte)ulCrc] ^ (ulCrc >> 8);
 		ulCrc  = crc32table[(byte)ulCrc] ^ (ulCrc >> 8);
 		ulCrc  = crc32table[(byte)ulCrc] ^ (ulCrc >> 8);
@@ -560,7 +561,7 @@ qboolean MD5_HashFile( byte digest[16], const char *pszFileName, uint seed[4] )
 		bytes = FS_Read( file, buffer, sizeof( buffer ));
 
 		if( bytes > 0 )
-			MD5Update( &MD5_Hash, buffer, bytes );
+			MD5Update( &MD5_Hash, (byte *)buffer, bytes );
 
 		if( FS_Eof( file ))
 			break;

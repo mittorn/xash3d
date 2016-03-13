@@ -11,7 +11,7 @@ APP_PLATFORM := android-12
 
 include $(XASH3D_CONFIG)
 
-LOCAL_CFLAGS += -D__MULTITEXTURE_SUPPORT__ -DXASH_GLES -DUSE_EVDEV -fsigned-char
+LOCAL_CFLAGS += -D__MULTITEXTURE_SUPPORT__ -DXASH_GLES -DUSE_EVDEV -fsigned-char -DCRASHHANDLER
 
 ifeq ($(XASH_SDL),1)
 LOCAL_CFLAGS += -DXASH_SDL
@@ -44,9 +44,7 @@ LOCAL_EXPORT_C_INCLUDES := $(LOCAL_C_INCLUDES)
 
 LOCAL_SRC_FILES := \
            platform/android/android.c \
-           platform/android/android-touchif.cpp \
-           platform/android/android-gameif.cpp \
-	    platform/android/dlsym-weak.cpp \
+	   platform/android/dlsym-weak.cpp \
 	   client/cl_cmds.c \
            client/cl_demo.c \
            client/cl_events.c \
@@ -54,6 +52,7 @@ LOCAL_SRC_FILES := \
            client/cl_game.c \
            client/cl_main.c \
            client/cl_menu.c \
+           client/cl_mobile.c \
            client/cl_parse.c \
            client/cl_pmove.c \
            client/cl_remap.c \
@@ -77,7 +76,8 @@ LOCAL_SRC_FILES := \
            client/gl_rsurf.c \
            client/gl_sprite.c \
            client/gl_studio.c \
-           client/gl_vidnt.c \
+           client/gl_vidnt_android.c \
+           client/gl_vidnt_common.c \
            client/gl_warp.c \
            client/s_backend.c \
            client/s_dsp.c \
@@ -92,6 +92,7 @@ LOCAL_SRC_FILES := \
            common/build.c \
            common/cmd.c \
            common/common.c \
+           common/touch.c \
            common/con_utils.c \
            common/console.c \
            common/crclib.c \
@@ -130,6 +131,7 @@ LOCAL_SRC_FILES := \
            server/sv_game.c \
            server/sv_init.c \
            server/sv_main.c \
+           server/sv_log.c \
            server/sv_move.c \
            server/sv_phys.c \
            server/sv_pmove.c \
@@ -155,8 +157,6 @@ LOCAL_SRC_FILES := \
 	   common/soundlib/libmpg/layer3.c \
 	   common/soundlib/libmpg/tabinit.c \
 	   common/soundlib/libmpg/common.c
-
-LOCAL_SHARED_LIBRARIES := touchcontrols
 
 ifeq ($(XASH_SDL),1)
 LOCAL_SHARED_LIBRARIES += SDL2

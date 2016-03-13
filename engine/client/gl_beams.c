@@ -421,7 +421,7 @@ static void CL_DrawDisk( int modelIndex, float frame, int rendermode, const vec3
 	
 	// Scroll speed 3.5 -- initial texture position, scrolls 3.5/sec (1.0 is entire texture)
 	vLast = fmod( freq * speed, 1 );
-	scale = scale * length;
+	//scale = scale * length;
 
 	w = freq * delta[2];
 
@@ -489,7 +489,7 @@ static void CL_DrawCylinder( int modelIndex, float frame, int rendermode, const 
 	
 	// Scroll speed 3.5 -- initial texture position, scrolls 3.5/sec (1.0 is entire texture)
 	vLast = fmod( freq * speed, 1.0f );
-	scale = scale * length;
+	//scale = scale * length;
 	
 	GL_Cull( GL_NONE );	// draw both sides
 	SetBeamRenderMode( rendermode );
@@ -743,9 +743,9 @@ static void DrawBeamFollow( int modelIndex, particle_t *pHead, int frame, int re
 	float	div;
 	float	vLast = 0.0;
 	float	vStep = 1.0;
-	vec3_t	last1, last2, tmp, normal, scaledColor;
+	vec3_t	last1, last2, tmp, normal, scaledColor, saved_last2;
 	HSPRITE	m_hSprite;
-	rgb_t	nColor;
+	rgb_t	nColor, saved_nColor;
 
 	m_hSprite = R_GetSpriteTexture( Mod_Handle( modelIndex ), frame );
 	if( !m_hSprite ) return;
@@ -778,7 +778,7 @@ static void DrawBeamFollow( int modelIndex, particle_t *pHead, int frame, int re
 	SetBeamRenderMode( rendermode );
 	GL_Bind( GL_TEXTURE0, m_hSprite );
 
-	pglBegin( GL_QUADS );
+	pglBegin( GL_TRIANGLES );
 
 	while( pHead )
 	{
@@ -789,6 +789,11 @@ static void DrawBeamFollow( int modelIndex, particle_t *pHead, int frame, int re
 		pglColor4ub( nColor[0], nColor[1], nColor[2], 255 );
 		pglTexCoord2f( 0.0f, 1.0f );
 		pglVertex3fv( last1 );
+
+		VectorCopy( last2, saved_last2 );
+		saved_nColor[0] = nColor[0];
+		saved_nColor[1] = nColor[1];
+		saved_nColor[2] = nColor[2];
 
 		// Transform point into screen space
 		TriWorldToScreen( pHead->org, screen );
@@ -820,12 +825,19 @@ static void DrawBeamFollow( int modelIndex, particle_t *pHead, int frame, int re
 		else
 		{
 			VectorClear( nColor );
-			fraction = 0.0;
 		}
 	
 		pglColor4ub( nColor[0], nColor[1], nColor[2], 255 );
 		pglTexCoord2f( 0.0f, 0.0f );
 		pglVertex3fv( last1 );
+		
+        pglColor4ub( saved_nColor[0], saved_nColor[1], saved_nColor[2], 255 );
+        pglTexCoord2f( 1.0f, 1.0f );
+        pglVertex3fv( saved_last2 );
+       
+        pglColor4ub( nColor[0], nColor[1], nColor[2], 255 );
+        pglTexCoord2f( 0.0f, 0.0f );
+        pglVertex3fv( last1 );
 
 		pglColor4ub( nColor[0], nColor[1], nColor[2], 255 );
 		pglTexCoord2f( 1.0f, 0.0f );
@@ -1368,7 +1380,6 @@ void CL_DrawBeamFollow( int spriteIndex, BEAM *pbeam, int frame, int rendermode,
 		VectorCopy( particles->org, delta );
 		TriWorldToScreen( particles->org, screenLast );
 		TriWorldToScreen( particles->next->org, screen );
-		particles = particles->next;
 	}
 	else
 	{
@@ -2133,7 +2144,7 @@ void CL_ReadLineFile_f( void )
 	string		token;
 	
 	Q_snprintf( filename, sizeof( filename ), "maps/%s.lin", clgame.mapname );
-	afile = FS_LoadFile( filename, NULL, false );
+	afile = (char *)FS_LoadFile( filename, NULL, false );
 
 	if( !afile )
 	{

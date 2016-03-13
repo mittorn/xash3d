@@ -182,7 +182,10 @@ hull_t *SV_HullForBsp( edict_t *ent, const vec3_t mins, const vec3_t maxs, float
 	model = Mod_Handle( ent->v.modelindex );
 
 	if( !model || model->type != mod_brush )
-		Host_Error( "Entity %i SOLID_BSP with a non bsp model %i\n", NUM_FOR_EDICT( ent ), (model) ? model->type : mod_bad );
+	{
+		Host_MapDesignError( "Entity %i SOLID_BSP with a non bsp model %i\n", NUM_FOR_EDICT( ent ), (model) ? model->type : mod_bad );
+		return NULL;
+	}
 
 	VectorSubtract( maxs, mins, size );
 
@@ -250,7 +253,9 @@ hull_t *SV_HullForEntity( edict_t *ent, vec3_t mins, vec3_t maxs, vec3_t offset 
 	if( ent->v.solid == SOLID_BSP )
 	{
 		if( ent->v.movetype != MOVETYPE_PUSH && ent->v.movetype != MOVETYPE_PUSHSTEP )
-			Host_Error( "'%s' has SOLID_BSP without MOVETYPE_PUSH or MOVETYPE_PUSHSTEP\n", SV_ClassName( ent ));
+		{
+			Host_MapDesignError( "'%s' has SOLID_BSP without MOVETYPE_PUSH or MOVETYPE_PUSHSTEP\n", SV_ClassName( ent ) );
+		}
 		hull = SV_HullForBsp( ent, mins, maxs, offset );
 	}
 	else
@@ -461,7 +466,7 @@ void SV_TouchLinks( edict_t *ent, areanode_t *node )
 	for( l = node->trigger_edicts.next; l != &node->trigger_edicts; l = next )
 	{
 		next = l->next;
-		touch = EDICT_FROM_AREA( l );
+		touch = (edict_t *)((byte *)l - ADDRESS_OF_AREA);
 
 		if( svgame.physFuncs.SV_TriggerTouch != NULL )
 		{
@@ -590,7 +595,7 @@ qboolean SV_HeadnodeVisible( mnode_t *node, byte *visbits, int *lastleaf )
 	{
 		leafnum = ((mleaf_t *)node - sv.worldmodel->leafs) - 1;
 
-		if(!( visbits[leafnum >> 3] & (1<<( leafnum & 7 ))))
+		if(!( visbits[leafnum >> 3] & (1U << ( leafnum & 7 ))))
 			return false;
 
 		if( lastleaf )
@@ -692,11 +697,13 @@ void SV_WaterLinks( const vec3_t origin, int *pCont, areanode_t *node )
 	vec3_t	test, offset;
 	model_t	*mod;
 
+	Q_memset( offset, 0, 3 * sizeof( float ) );
+
 	// get water edicts
 	for( l = node->water_edicts.next; l != &node->water_edicts; l = next )
 	{
 		next = l->next;
-		touch = EDICT_FROM_AREA( l );
+		touch = (edict_t *)((byte *)l - ADDRESS_OF_AREA);
 
 		if( touch->v.solid != SOLID_NOT ) // disabled ?
 			continue;
@@ -718,7 +725,13 @@ void SV_WaterLinks( const vec3_t origin, int *pCont, areanode_t *node )
 		mod = Mod_Handle( touch->v.modelindex );
 
 		// check water brushes accuracy
-		hull = SV_HullForBsp( touch, vec3_origin, vec3_origin, offset );
+		if( Mod_GetType( touch->v.modelindex ) == mod_brush )
+			hull = SV_HullForBsp( touch, vec3_origin, vec3_origin, offset );
+		else
+		{
+			Host_MapDesignError( "Water must have BSP model!\n" );
+			hull = SV_HullForBox( touch->v.mins, touch->v.maxs );
+		}
 
 		// support for rotational water
 		if(( mod->flags & MODEL_HAS_ORIGIN ) && !VectorIsNull( touch->v.angles ))
@@ -1125,7 +1138,7 @@ static void SV_ClipToLinks( areanode_t *node, moveclip_t *clip )
 	{
 		next = l->next;
 
-		touch = EDICT_FROM_AREA( l );
+		touch = (edict_t *)((byte *)l - ADDRESS_OF_AREA);
 
 		if( touch->v.groupinfo != 0 && SV_IsValidEdict( clip->passedict ) && clip->passedict->v.groupinfo != 0 )
 		{
@@ -1138,7 +1151,10 @@ static void SV_ClipToLinks( areanode_t *node, moveclip_t *clip )
 			continue;
 
 		if( touch->v.solid == SOLID_TRIGGER )
-			Host_Error( "trigger in clipping list\n" );
+		{
+			Host_MapDesignError( "trigger in clipping list\n" );
+			touch->v.solid = SOLID_NOT;
+		}
 
 		// custom user filter
 		if( svgame.dllFuncs2.pfnShouldCollide )
@@ -1234,7 +1250,7 @@ void SV_ClipToWorldBrush( areanode_t *node, moveclip_t *clip )
 	{
 		next = l->next;
 
-		touch = EDICT_FROM_AREA( l );
+		touch = (edict_t *)((byte *)l - ADDRESS_OF_AREA);
 
 		if( touch->v.solid != SOLID_BSP || touch == clip->passedict || !( touch->v.flags & FL_WORLDBRUSH ))
 			continue;
@@ -1444,6 +1460,8 @@ trace_t SV_MoveToss( edict_t *tossent, edict_t *ignore )
 	vec3_t	original_avelocity;
 	trace_t	trace;
 	int	i;
+
+	Q_memset( &trace, 0, sizeof( trace_t ) );
 
 	VectorCopy( tossent->v.origin, original_origin );
 	VectorCopy( tossent->v.velocity, original_velocity );

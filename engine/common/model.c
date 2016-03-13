@@ -159,8 +159,8 @@ void Mod_PrintBSPFileSizes_f( void )
 
 	Msg( "=== Total BSP file data space used: %s ===\n", Q_memprint( totalmemory ));
 	Msg( "World size ( %g %g %g ) units\n", world.size[0], world.size[1], world.size[2] );
-	Msg( "original name: ^1%s\n", worldmodel->name );
-	Msg( "internal name: %s\n", (world.message[0]) ? va( "^2%s", world.message ) : "none" );
+	Msg( "Original name: ^1%s\n", worldmodel->name );
+	Msg( "Internal name: %s\n", (world.message[0]) ? va( "^2%s", world.message ) : "none" );
 }
 
 /*
@@ -214,7 +214,7 @@ byte *Mod_CompressVis( const byte *in, size_t *size )
 
 	if( !worldmodel )
 	{
-		Host_Error( "Mod_CompressVis: no worldmodel\n" );
+		Host_MapDesignError( "Mod_CompressVis: no worldmodel\n" );
 		return NULL;
 	}
 	
@@ -254,7 +254,7 @@ byte *Mod_DecompressVis( const byte *in )
 
 	if( !worldmodel )
 	{
-		Host_Error( "Mod_DecompressVis: no worldmodel\n" );
+		Host_MapDesignError( "Mod_DecompressVis: no worldmodel\n" );
 		return NULL;
 	}
 
@@ -521,6 +521,8 @@ static void Mod_FreeModel( model_t *mod )
 	case mod_brush:
 		Mod_UnloadBrushModel( mod );
 		break;
+	default:
+		break;
 	}
 }
 
@@ -560,10 +562,10 @@ void Mod_ClearAll( qboolean keep_playermodel )
 			continue;
 
 		Mod_FreeModel( mod );
-		memset( mod, 0, sizeof( *mod ));
+		Q_memset( mod, 0, sizeof( *mod ));
 	}
 
-	// g-cont. may be just leave unchanged?
+	// g-cont. may just leave unchanged?
 	if( !keep_playermodel ) cm_nummodels = 0;
 }
 
@@ -603,8 +605,17 @@ static void Mod_LoadSubmodels( const dlump_t *l )
 	if( l->filelen % sizeof( *in )) Host_Error( "Mod_LoadBModel: funny lump size\n" );
 	count = l->filelen / sizeof( *in );
 
-	if( count < 1 ) Host_Error( "Map %s without models\n", loadmodel->name );
-	if( count > MAX_MAP_MODELS ) Host_Error( "Map %s has too many models\n", loadmodel->name );
+	if( count < 1 )
+	{
+		Host_MapDesignError( "Map %s without models\n", loadmodel->name );
+		return;
+	}
+	if( count > MAX_MAP_MODELS )
+	{
+		Host_MapDesignError( "Map %s has too many models\n", loadmodel->name );
+		// recover: cut models count
+		count = MAX_MAP_MODELS;
+	}
 
 	// allocate extradata
 	out = Mem_Alloc( loadmodel->mempool, count * sizeof( *out ));
@@ -652,14 +663,15 @@ Mod_LoadTextures
 */
 static void Mod_LoadTextures( const dlump_t *l )
 {
-	dmiptexlump_t	*in;
+	byte		*buf;
+	int		*offset;
 	texture_t		*tx, *tx2;
 	texture_t		*anims[10];
 	texture_t		*altanims[10];
 	int		num, max, altmax;
 	char		texname[64];
 	imgfilter_t	*filter;
-	mip_t		*mt;
+	mip_t		mt;
 	int 		i, j; 
 
 	if( world.loading )
@@ -680,9 +692,9 @@ static void Mod_LoadTextures( const dlump_t *l )
 		return;
 	}
 
-	in = (void *)(mod_base + l->fileofs);
+	offset = (int *)(mod_base + l->fileofs);
 
-	loadmodel->numtextures = in->nummiptex;
+	loadmodel->numtextures = *offset;
 	loadmodel->textures = (texture_t **)Mem_Alloc( loadmodel->mempool, loadmodel->numtextures * sizeof( texture_t* ));
 
 	for( i = 0; i < loadmodel->numtextures; i++ )
@@ -690,7 +702,7 @@ static void Mod_LoadTextures( const dlump_t *l )
 		qboolean	load_external = false;
 		qboolean	load_external_luma = false;
 
-		if( in->dataofs[i] == -1 )
+		if( *(offset + i + 1) == -1 )
 		{
 			// create default texture (some mods requires this)
 			tx = Mem_Alloc( loadmodel->mempool, sizeof( *tx ));
@@ -702,37 +714,39 @@ static void Mod_LoadTextures( const dlump_t *l )
 			continue; // missed
 		}
 
-		mt = (mip_t *)((byte *)in + in->dataofs[i] );
-
-		if( !mt->name[0] )
+		buf = (byte *)offset + *(offset + i + 1);
+		Q_memcpy( &mt, buf, sizeof(mip_t));
+		
+		if( !mt.name[0] )
 		{
 			MsgDev( D_WARN, "unnamed texture in %s\n", loadmodel->name );
-			Q_snprintf( mt->name, sizeof( mt->name ), "miptex_%i", i );
+			Q_snprintf( mt.name, sizeof( mt.name ), "miptex_%i", i );
 		}
 
 		tx = Mem_Alloc( loadmodel->mempool, sizeof( *tx ));
 		loadmodel->textures[i] = tx;
 
 		// convert to lowercase
-		Q_strnlwr( mt->name, mt->name, sizeof( mt->name ));
-		Q_strncpy( tx->name, mt->name, sizeof( tx->name ));
+		Q_strnlwr( mt.name, mt.name, sizeof( mt.name ));
+		Q_strncpy( tx->name, mt.name, sizeof( tx->name ));
+		Q_memcpy( buf, mt.name, sizeof(mt.name));
 		filter = R_FindTexFilter( tx->name ); // grab texture filter
 
-		tx->width = mt->width;
-		tx->height = mt->height;
+		tx->width = mt.width;
+		tx->height = mt.height;
 
 		// check for multi-layered sky texture
-		if( world.loading && !Q_strncmp( mt->name, "sky", 3 ) && mt->width == 256 && mt->height == 128 )
+		if( world.loading && !Q_strncmp( mt.name, "sky", 3 ) && mt.width == 256 && mt.height == 128 )
 		{	
 			if( Mod_AllowMaterials( ))
 			{
 				// build standard path: "materials/mapname/texname_solid.tga"
-				Q_snprintf( texname, sizeof( texname ), "materials/%s/%s_solid.tga", modelname, mt->name );
+				Q_snprintf( texname, sizeof( texname ), "materials/%s/%s_solid.tga", modelname, mt.name );
 
 				if( !FS_FileExists( texname, false ))
 				{
 					// build common path: "materials/mapname/texname_solid.tga"
-					Q_snprintf( texname, sizeof( texname ), "materials/common/%s_solid.tga", mt->name );
+					Q_snprintf( texname, sizeof( texname ), "materials/common/%s_solid.tga", mt.name );
 
 					if( FS_FileExists( texname, false ))
 						load_external = true;
@@ -749,12 +763,12 @@ static void Mod_LoadTextures( const dlump_t *l )
 				if( tr.solidskyTexture )
 				{
 					// build standard path: "materials/mapname/texname_alpha.tga"
-					Q_snprintf( texname, sizeof( texname ), "materials/%s/%s_alpha.tga", modelname, mt->name );
+					Q_snprintf( texname, sizeof( texname ), "materials/%s/%s_alpha.tga", modelname, mt.name );
 
 					if( !FS_FileExists( texname, false ))
 					{
 						// build common path: "materials/mapname/texname_alpha.tga"
-						Q_snprintf( texname, sizeof( texname ), "materials/common/%s_alpha.tga", mt->name );
+						Q_snprintf( texname, sizeof( texname ), "materials/common/%s_alpha.tga", mt.name );
 
 						if( FS_FileExists( texname, false ))
 							load_external = true;
@@ -779,7 +793,7 @@ static void Mod_LoadTextures( const dlump_t *l )
 			}
 
 			if( !tr.solidskyTexture && !tr.alphaskyTexture )
-				R_InitSky( mt, tx ); // fallback to standard sky
+				R_InitSky( &mt, buf, tx ); // fallback to standard sky
 
 			if( tr.solidskyTexture && tr.alphaskyTexture )
 				world.sky_sphere = true;
@@ -788,15 +802,15 @@ static void Mod_LoadTextures( const dlump_t *l )
 		{
 			if( Mod_AllowMaterials( ))
 			{
-				if( mt->name[0] == '*' ) mt->name[0] = '!'; // replace unexpected symbol
+				if( mt.name[0] == '*' ) mt.name[0] = '!'; // replace unexpected symbol
 
 				// build standard path: "materials/mapname/texname.tga"
-				Q_snprintf( texname, sizeof( texname ), "materials/%s/%s.tga", modelname, mt->name );
+				Q_snprintf( texname, sizeof( texname ), "materials/%s/%s.tga", modelname, mt.name );
 
 				if( !FS_FileExists( texname, false ))
 				{
 					// build common path: "materials/mapname/texname.tga"
-					Q_snprintf( texname, sizeof( texname ), "materials/common/%s.tga", mt->name );
+					Q_snprintf( texname, sizeof( texname ), "materials/common/%s.tga", mt.name );
 
 					if( FS_FileExists( texname, false ))
 						load_external = true;
@@ -805,17 +819,17 @@ static void Mod_LoadTextures( const dlump_t *l )
 			}
 load_wad_textures:
 			if( !load_external )
-				Q_snprintf( texname, sizeof( texname ), "%s%s.mip", ( mt->offsets[0] > 0 ) ? "#" : "", mt->name );
+				Q_snprintf( texname, sizeof( texname ), "%s%s.mip", ( mt.offsets[0] > 0 ) ? "#" : "", mt.name );
 			else MsgDev( D_NOTE, "loading HQ: %s\n", texname );
 
-			if( mt->offsets[0] > 0 && !load_external )
+			if( mt.offsets[0] > 0 && !load_external )
 			{
 				// NOTE: imagelib detect miptex version by size
 				// 770 additional bytes is indicated custom palette
-				int size = (int)sizeof( mip_t ) + ((mt->width * mt->height * 85)>>6);
+				int size = (int)sizeof( mip_t ) + ((mt.width * mt.height * 85)>>6);
 				if( bmodel_version >= HLBSP_VERSION ) size += sizeof( short ) + 768;
 
-				tx->gl_texturenum = GL_LoadTexture( texname, (byte *)mt, size, 0, filter );
+				tx->gl_texturenum = GL_LoadTexture( texname, buf, size, 0, filter );
 			}
 			else
 			{
@@ -854,12 +868,12 @@ load_wad_textures:
 		if( load_external )
 		{
 			// build standard luma path: "materials/mapname/texname_luma.tga"
-			Q_snprintf( texname, sizeof( texname ), "materials/%s/%s_luma.tga", modelname, mt->name );
+			Q_snprintf( texname, sizeof( texname ), "materials/%s/%s_luma.tga", modelname, mt.name );
 
 			if( !FS_FileExists( texname, false ))
 			{
 				// build common path: "materials/mapname/texname_luma.tga"
-				Q_snprintf( texname, sizeof( texname ), "materials/common/%s_luma.tga", mt->name );
+				Q_snprintf( texname, sizeof( texname ), "materials/common/%s_luma.tga", mt.name );
 
 				if( FS_FileExists( texname, false ))
 					load_external_luma = true;
@@ -871,21 +885,21 @@ load_wad_textures:
 		if( R_GetTexture( tx->gl_texturenum )->flags & TF_HAS_LUMA || load_external_luma )
 		{
 			if( !load_external_luma )
-				Q_snprintf( texname, sizeof( texname ), "#%s_luma.mip", mt->name );
+				Q_snprintf( texname, sizeof( texname ), "#%s_luma.mip", mt.name );
 			else MsgDev( D_NOTE, "loading luma HQ: %s\n", texname );
 
-			if( mt->offsets[0] > 0 && !load_external_luma )
+			if( mt.offsets[0] > 0 && !load_external_luma )
 			{
 				// NOTE: imagelib detect miptex version by size
 				// 770 additional bytes is indicated custom palette
-				int size = (int)sizeof( mip_t ) + ((mt->width * mt->height * 85)>>6);
+				int size = (int)sizeof( mip_t ) + ((mt.width * mt.height * 85)>>6);
 				if( bmodel_version >= HLBSP_VERSION ) size += sizeof( short ) + 768;
 
-				tx->fb_texturenum = GL_LoadTexture( texname, (byte *)mt, size, TF_NOMIPMAP|TF_MAKELUMA, NULL );
+				tx->fb_texturenum = GL_LoadTexture( texname, buf, size, TF_NOMIPMAP|TF_MAKELUMA, NULL );
 			}
 			else
 			{
-				size_t srcSize = 0;
+				fs_offset_t srcSize = 0;
 				byte *src = NULL;
 
 				// NOTE: we can't loading it from wad as normal because _luma texture doesn't exist
@@ -907,7 +921,7 @@ load_wad_textures:
 				}
 
 				// okay, loading it from wad or hi-res version
-				tx->fb_texturenum = GL_LoadTexture( texname, src, srcSize, TF_NOMIPMAP|TF_MAKELUMA, NULL );
+				tx->fb_texturenum = GL_LoadTexture( texname, src, (size_t)srcSize, TF_NOMIPMAP|TF_MAKELUMA, NULL );
 				if( src ) Mem_Free( src );
 
 				if( !tx->fb_texturenum && load_external_luma )
@@ -958,7 +972,10 @@ load_wad_textures:
 			altanims[altmax] = tx;
 			altmax++;
 		}
-		else Host_Error( "Mod_LoadTextures: bad animating texture %s\n", tx->name );
+		else 
+		{
+			Host_MapDesignError( "Mod_LoadTextures: bad animating texture %s\n", tx->name );
+		}
 
 		for( j = i + 1; j < loadmodel->numtextures; j++ )
 		{
@@ -984,14 +1001,18 @@ load_wad_textures:
 				if( num + 1 > altmax )
 					altmax = num + 1;
 			}
-			else Host_Error( "Mod_LoadTextures: bad animating texture %s\n", tx->name );
+			else Host_MapDesignError( "Mod_LoadTextures: bad animating texture %s\n", tx->name );
 		}
 
 		// link them all together
 		for( j = 0; j < max; j++ )
 		{
 			tx2 = anims[j];
-			if( !tx2 ) Host_Error( "Mod_LoadTextures: missing frame %i of %s\n", j, tx->name );
+			if( !tx2 )
+			{
+				Host_MapDesignError( "Mod_LoadTextures: missing frame %i of %s\n", j, tx->name );
+				continue;
+			}
 			tx2->anim_total = max * ANIM_CYCLE;
 			tx2->anim_min = j * ANIM_CYCLE;
 			tx2->anim_max = (j + 1) * ANIM_CYCLE;
@@ -1002,7 +1023,11 @@ load_wad_textures:
 		for( j = 0; j < altmax; j++ )
 		{
 			tx2 = altanims[j];
-			if( !tx2 ) Host_Error( "Mod_LoadTextures: missing frame %i of %s\n", j, tx->name );
+			if( !tx2 )
+			{
+				Host_MapDesignError( "Mod_LoadTextures: missing frame %i of %s\n", j, tx->name );
+				continue;
+			}
 			tx2->anim_total = altmax * ANIM_CYCLE;
 			tx2->anim_min = j * ANIM_CYCLE;
 			tx2->anim_max = (j+1) * ANIM_CYCLE;
@@ -1033,7 +1058,10 @@ load_wad_textures:
 			anims[max] = tx;
 			max++;
 		}
-		else Host_Error( "Mod_LoadTextures: bad detail texture %s\n", tx->name );
+		else
+		{
+			Host_MapDesignError( "Mod_LoadTextures: bad detail texture %s\n", tx->name );
+		}
 
 		for( j = i + 1; j < loadmodel->numtextures; j++ )
 		{
@@ -1052,14 +1080,18 @@ load_wad_textures:
 				if( num+1 > max )
 					max = num + 1;
 			}
-			else Host_Error( "Mod_LoadTextures: bad detail texture %s\n", tx->name );
+			else Host_MapDesignError( "Mod_LoadTextures: bad detail texture %s\n", tx->name );
 		}
 
 		// link them all together
 		for( j = 0; j < max; j++ )
 		{
 			tx2 = anims[j];
-			if( !tx2 ) Host_Error( "Mod_LoadTextures: missing frame %i of %s\n", j, tx->name );
+			if( !tx2 ) 
+			{
+				Host_MapDesignError( "Mod_LoadTextures: missing frame %i of %s\n", j, tx->name );
+				continue;
+			}
 			tx2->anim_total = -( max * ANIM_CYCLE ); // to differentiate from animations
 			tx2->anim_min = j * ANIM_CYCLE;
 			tx2->anim_max = (j + 1) * ANIM_CYCLE;
@@ -1128,6 +1160,7 @@ static void Mod_LoadDeluxemap( void )
 	char	path[64];
 	int	iCompare;
 	byte	*in;
+	fs_offset_t	filesize;
 
 	if( !world.loading ) return;	// only world can have deluxedata
 
@@ -1140,7 +1173,7 @@ static void Mod_LoadDeluxemap( void )
 
 	Q_snprintf( path, sizeof( path ), "maps/%s.dlit", modelname );
 
-	// make sure what deluxemap is actual
+	// make sure that deluxemap is actual
 	if( !COM_CompareFileTime( path, loadmodel->name, &iCompare ))
 	{
 		world.deluxedata = NULL;
@@ -1148,10 +1181,11 @@ static void Mod_LoadDeluxemap( void )
 		return;
           }
 
-	if( iCompare < 0 ) // this may happens if level-designer used -onlyents key for hlcsg
-		MsgDev( D_WARN, "Mod_LoadDeluxemap: %s probably is out of date\n", path );
+	if( iCompare < 0 ) // this may happen if level-designer used -onlyents key for hlcsg
+		MsgDev( D_WARN, "Mod_LoadDeluxemap: %s is probably out of date\n", path );
 
-	in = FS_LoadFile( path, &world.vecdatasize, false );
+	in = FS_LoadFile( path, &filesize, false );
+	world.vecdatasize = filesize;
 
 	ASSERT( in != NULL );
 
@@ -1231,7 +1265,7 @@ static void Mod_LoadLighting( const dlump_t *l )
 		break;
 	}
 
-	// try to loading deluxemap too
+	// also try to load deluxemap
 	Mod_LoadDeluxemap ();
 }
 
@@ -1260,7 +1294,10 @@ static void Mod_CalcSurfaceExtents( msurface_t *surf )
 		e = loadmodel->surfedges[surf->firstedge + i];
 
 		if( e >= loadmodel->numedges || e <= -loadmodel->numedges )
-			Host_Error( "Mod_CalcSurfaceBounds: bad edge\n" );
+		{
+			Host_MapDesignError( "Mod_CalcSurfaceBounds: bad edge\n" );
+			continue;
+		}
 
 		if( e >= 0 ) v = &loadmodel->vertexes[loadmodel->edges[e].v[0]];
 		else v = &loadmodel->vertexes[loadmodel->edges[-e].v[1]];
@@ -1305,7 +1342,10 @@ static void Mod_CalcSurfaceBounds( msurface_t *surf, mextrasurf_t *info )
 		e = loadmodel->surfedges[surf->firstedge + i];
 
 		if( e >= loadmodel->numedges || e <= -loadmodel->numedges )
-			Host_Error( "Mod_CalcSurfaceBounds: bad edge\n" );
+		{
+			Host_MapDesignError( "Mod_CalcSurfaceBounds: bad edge\n" );
+			return;
+		}
 
 		if( e >= 0 ) v = &loadmodel->vertexes[loadmodel->edges[e].v[0]];
 		else v = &loadmodel->vertexes[loadmodel->edges[-e].v[1]];
@@ -1348,7 +1388,7 @@ static void Mod_BuildPolygon( mextrasurf_t *info, msurface_t *surf, int numVerts
 	VectorCopy( surf->texinfo->vecs[0], tangent );
 	VectorNegate( surf->texinfo->vecs[1], binormal );
 
-	VectorNormalize( normal ); // g-cont. this is even needed?
+	VectorNormalize( normal ); // g-cont. is this even needed?
 	VectorNormalize( tangent );
 	VectorNormalize( binormal );
 
@@ -1356,7 +1396,7 @@ static void Mod_BuildPolygon( mextrasurf_t *info, msurface_t *surf, int numVerts
 	mesh->verts = (glvert_t *)buffer;
 	buffer += numVerts * sizeof( glvert_t );
 	mesh->elems = (word *)buffer;
-	buffer += numElems * sizeof( word );
+	//buffer += numElems * sizeof( word );
 
 	mesh->next = info->mesh;
 	mesh->surf = surf;	// NOTE: meshchains can be linked with one surface
@@ -1428,6 +1468,8 @@ static void Mod_SubdividePolygon( mextrasurf_t *info, msurface_t *surf, int numV
 	uint		bufSize;
 	byte		*buffer;
 	msurfmesh_t	*mesh;
+
+	Q_memset( dists, 0, MAX_SIDE_VERTS * sizeof( float ) );
 
 	ClearBounds( mins, maxs );
 
@@ -1507,7 +1549,7 @@ static void Mod_SubdividePolygon( mextrasurf_t *info, msurface_t *surf, int numV
 
 	// setup pointers
 	mesh->verts = (glvert_t *)buffer;
-	buffer += numVerts * sizeof( glvert_t );
+	//buffer += numVerts * sizeof( glvert_t );
 
 	VectorClear( vTotal );
 	VectorClear( nTotal );
@@ -1655,11 +1697,11 @@ static void Mod_ConvertSurface( mextrasurf_t *info, msurface_t *surf )
 	mesh->verts = (glvert_t *)buffer;
 	buffer += numVerts * sizeof( glvert_t );
 	mesh->elems = (word *)buffer;
-	buffer += numElems * sizeof( word );
+	//buffer += numElems * sizeof( word );
 
 	// setup moving pointers
-	outVerts = (glvert_t *)mesh->verts;
-	outElems = (word *)mesh->elems;
+	//outVerts = (glvert_t *)mesh->verts;
+	//outElems = (word *)mesh->elems;
 
 	// store vertex data
 	numElems = numVerts = 0;
@@ -1895,7 +1937,7 @@ static void Mod_LoadSurfaces( const dlump_t *l )
 				out->samples = loadmodel->lightdata + (in->lightofs / 3);
 			else out->samples = loadmodel->lightdata + in->lightofs;
 
-			// if deluxemap is present setup it too
+			// also setup deluxemap if present
 			if( world.deluxedata )
 				info->deluxemap = world.deluxedata + (in->lightofs / 3);
 		}
@@ -2024,8 +2066,9 @@ static void Mod_LoadMarkSurfaces( const dlump_t *l )
 	{
 		j = in[i];
 		if( j < 0 ||  j >= loadmodel->numsurfaces )
-			Host_Error( "Mod_LoadMarkFaces: bad surface number in '%s'\n", loadmodel->name );
-		out[i] = loadmodel->surfaces + j;
+			Host_MapDesignError( "Mod_LoadMarkFaces: bad surface number in '%s'\n", loadmodel->name );
+		else
+			out[i] = loadmodel->surfaces + j;
 	}
 }
 
@@ -2141,7 +2184,7 @@ static void Mod_LoadLeafs( const dlump_t *l )
 	}
 
 	if( loadmodel->leafs[0].contents != CONTENTS_SOLID )
-		Host_Error( "Mod_LoadLeafs: Map %s has leaf 0 is not CONTENTS_SOLID\n", loadmodel->name );
+		Host_MapDesignError( "Mod_LoadLeafs: Map %s has leaf 0 is not CONTENTS_SOLID\n", loadmodel->name );
 }
 
 /*
@@ -2419,7 +2462,7 @@ static void Mod_FindModelOrigin( const char *entities, const char *modelname, ve
 	string	keyname;
 	char	token[2048];
 	qboolean	model_found;
-	qboolean	origin_found;
+	//qboolean	origin_found;
 
 	if( !entities || !modelname || !*modelname || !origin )
 		return;
@@ -2431,7 +2474,8 @@ static void Mod_FindModelOrigin( const char *entities, const char *modelname, ve
 		if( token[0] != '{' )
 			Host_Error( "Mod_FindModelOrigin: found %s when expecting {\n", token );
 
-		model_found = origin_found = false;
+		model_found = false;
+		//origin_found = false;
 		VectorClear( origin );
 
 		while( 1 )
@@ -2456,7 +2500,7 @@ static void Mod_FindModelOrigin( const char *entities, const char *modelname, ve
 			if( !Q_stricmp( keyname, "origin" ))
 			{
 				Q_atov( origin, token, 3 );
-				origin_found = true;
+				//origin_found = true;
 			}
 		}
 
@@ -2514,7 +2558,7 @@ void Mod_CalcPHS( void )
 	int	hcount, vcount;
 	int	i, j, k, l, index, num;
 	int	rowbytes, rowwords;
-	int	bitbyte, rowsize;
+	int	bitbyte, rowsize = 0;
 	int	*visofs, total_size = 0;
 	byte	*vismap, *vismap_p;
 	byte	*uncompressed_vis;
@@ -2594,7 +2638,7 @@ void Mod_CalcPHS( void )
 		}
 
 		// compress PHS data back
-		comp = Mod_CompressVis( (byte *)dest, &rowsize );
+		comp = Mod_CompressVis( (byte *)dest, (size_t *)&rowsize );
 		visofs[i] = vismap_p - vismap; // leaf 0 is a common solid 
 		total_size += rowsize;
 
@@ -2700,7 +2744,7 @@ static void Mod_LoadBrushModel( model_t *mod, const void *buffer, qboolean *load
 		sample_size = 8;
 		break;
 	default:
-		MsgDev( D_ERROR, "%s has wrong version number (%i should be %i)", loadmodel->name, i, HLBSP_VERSION );
+		MsgDev( D_ERROR, "%s has wrong version number (%i should be %i)\n", loadmodel->name, i, HLBSP_VERSION );
 		return;
 	}
 
@@ -2712,8 +2756,8 @@ static void Mod_LoadBrushModel( model_t *mod, const void *buffer, qboolean *load
 	}
 	else if( world.lm_sample_size != sample_size )
 	{
-		// can't mixing world and bmodels with different sample sizes!
-		MsgDev( D_ERROR, "%s has wrong version number (%i should be %i)", loadmodel->name, i, world.version );
+		// can't mix world and bmodels with different sample sizes!
+		MsgDev( D_ERROR, "%s has wrong version number (%i should be %i)\n", loadmodel->name, i, world.version );
 		return;		
 	}
 	bmodel_version = i;	// share it
@@ -2907,7 +2951,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 
 	if( !mod )
 	{
-		if( crash ) Host_Error( "Mod_ForName: NULL model\n" );
+		if( crash ) Host_MapDesignError( "Mod_ForName: NULL model\n" );
 		else MsgDev( D_ERROR, "Mod_ForName: NULL model\n" );
 		return NULL;		
 	}
@@ -2932,7 +2976,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 		{
 			Q_memset( mod, 0, sizeof( model_t ));
 
-			if( crash ) Host_Error( "Mod_ForName: %s couldn't load\n", tempname );
+			if( crash ) Host_MapDesignError( "Mod_ForName: %s couldn't load\n", tempname );
 			else MsgDev( D_ERROR, "Mod_ForName: %s couldn't load\n", tempname );
 
 			return NULL;
@@ -2963,7 +3007,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 		break;
 	default:
 		Mem_Free( buf );
-		if( crash ) Host_Error( "Mod_ForName: %s unknown format\n", tempname );
+		if( crash ) Host_MapDesignError( "Mod_ForName: %s unknown format\n", tempname );
 		else MsgDev( D_ERROR, "Mod_ForName: %s unknown format\n", tempname );
 		return NULL;
 	}
@@ -2973,7 +3017,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 		Mod_FreeModel( mod );
 		Mem_Free( buf );
 
-		if( crash ) Host_Error( "Mod_ForName: %s couldn't load\n", tempname );
+		if( crash ) Host_MapDesignError( "Mod_ForName: %s couldn't load\n", tempname );
 		else MsgDev( D_ERROR, "Mod_ForName: %s couldn't load\n", tempname );
 
 		return NULL;
@@ -3052,7 +3096,7 @@ void Mod_LoadWorld( const char *name, uint *checksum, qboolean force )
 	// load the newmap
 	world.loading = true;
 	worldmodel = Mod_ForName( name, true );
-	CRC32_MapFile( &world.checksum, worldmodel->name );
+	CRC32_MapFile( (dword *)&world.checksum, worldmodel->name );
 	world.loading = false;
 
 	if( checksum ) *checksum = world.checksum;
@@ -3177,7 +3221,8 @@ void Mod_LoadCacheFile( const char *filename, cache_user_t *cu )
 {
 	byte	*buf;
 	string	name;
-	size_t	i, j, size;
+	size_t	i, j;
+	fs_offset_t size;
 
 	ASSERT( cu != NULL );
 
@@ -3194,7 +3239,11 @@ void Mod_LoadCacheFile( const char *filename, cache_user_t *cu )
 	name[j] = '\0';
 
 	buf = FS_LoadFile( name, &size, false );
-	if( !buf || !size ) Host_Error( "LoadCacheFile: ^1can't load %s^7\n", filename );
+	if( !buf || !size )
+	{
+		Host_MapDesignError( "LoadCacheFile: ^1can't load %s^7\n", filename );
+		return;
+	}
 	cu->data = Mem_Alloc( com_studiocache, size );
 	Q_memcpy( cu->data, buf, size );
 	Mem_Free( buf );

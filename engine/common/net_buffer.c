@@ -26,7 +26,7 @@ static dword	ExtraMasks[32];
 
 short BF_BigShort( short swap )
 {
-#ifdef _WIN32
+#ifdef __MSC_VER
 	short *s = &swap;
 	
 	__asm {
@@ -263,13 +263,13 @@ void BF_WriteBitAngle( sizebuf_t *bf, float fAngle, int numbits )
 	int	d;
 
 	// clamp the angle before receiving
-	if( fAngle > 360.0f ) fAngle -= 360.0f; 
-	else if( fAngle < 0 ) fAngle += 360.0f;
+	fAngle = fmod( fAngle, 360.0f );
+	if( fAngle < 0 ) fAngle += 360.0f;
 
 	shift = ( 1 << numbits );
 	mask = shift - 1;
 
-	d = (int)( fAngle * shift ) / 360;
+	d = (int)( ( fAngle * shift ) / 360.0f );
 	d &= mask;
 
 	BF_WriteUBitLong( bf, (uint)d, numbits );
@@ -501,7 +501,7 @@ int BF_ReadSBitLong( sizebuf_t *bf, int numbits )
 	// NOTE: it does this wierdness here so it's bit-compatible with regular integer data in the buffer.
 	// (Some old code writes direct integers right into the buffer).
 	sign = BF_ReadOneBit( bf );
-	if( sign ) r = -( BIT( numbits - 1 ) - r );
+	if( sign ) r = -( (int)( BIT( numbits - 1 ) - r ) );
 
 	return r;
 }

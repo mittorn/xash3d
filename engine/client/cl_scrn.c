@@ -81,6 +81,8 @@ void SCR_DrawFPS( void )
 	framecount++;
 	calc = framerate;
 
+	if( calc == 0 ) return;
+
 	if( calc < 1.0f )
 	{
 		Q_snprintf( fpsstring, sizeof( fpsstring ), "%4i spf", (int)(1.0f / calc + 0.5f));
@@ -101,6 +103,39 @@ void SCR_DrawFPS( void )
 
 	Con_DrawStringLen( fpsstring, &offset, NULL );
 	Con_DrawString( scr_width->integer - offset - 2, 4, fpsstring, color );
+}
+
+/*
+==============
+SCR_DrawPos
+
+Draw local player position, angles and velocity
+==============
+*/
+void SCR_DrawPos( void )
+{
+	static char	msg[MAX_SYSPATH];
+	float speed;
+	cl_entity_t *pPlayer;
+	rgba_t color;
+
+	if( cls.state != ca_active ) return;
+	if( !cl_showpos->integer || cl.background ) return;
+
+	pPlayer = CL_GetLocalPlayer();
+	speed = VectorLength( cl.frame.local.client.velocity );
+
+	Q_snprintf( msg, MAX_SYSPATH,
+	"pos: %.2f %.2f %.2f\n"
+	"ang: %.2f %.2f %.2f\n"
+	"velocity: %.2f", pPlayer->origin[0], pPlayer->origin[1], pPlayer->origin[2],
+					pPlayer->angles[0], pPlayer->angles[1], pPlayer->angles[2],
+					speed );
+
+	MakeRGBA( color, 255, 255, 255, 255 );
+
+	Con_DrawString( scr_width->integer / 2, 4, msg, color );
+
 }
 
 /*
@@ -459,17 +494,19 @@ void SCR_LoadCreditsFont( void )
 	cls.creditsFont.hFontTexture = GL_LoadTexture( "gfx.wad/creditsfont.fnt", NULL, 0, TF_IMAGE, NULL );
 	R_GetTextureParms( &fontWidth, NULL, cls.creditsFont.hFontTexture );
 
+	if( fontWidth == 0 ) return;
+	
 	// setup creditsfont
 	if( FS_FileExists( "gfx/creditsfont.fnt", false ))
 	{
 		byte	*buffer;
-		size_t	length;
+		fs_offset_t	length;
 		qfont_t	*src;
 
-		// half-life font with variable chars witdh
+		// half-life font with variable chars width
 		buffer = FS_LoadFile( "gfx/creditsfont.fnt", &length, false );
 	
-		if( buffer && length >= sizeof( qfont_t ))
+		if( buffer && length >= ( fs_offset_t )sizeof( qfont_t ))
 		{
 			int	i;
 	
@@ -531,6 +568,7 @@ void SCR_RegisterTextures( void )
 	cls.particleImage = GL_LoadTexture( "*particle", NULL, 0, TF_IMAGE, NULL );
 
 	// register gfx.wad images
+	cls.oldParticleImage = GL_LoadTexture("*oldparticle", NULL, 0, TF_IMAGE, NULL);
 	cls.pauseIcon = GL_LoadTexture( "gfx.wad/paused.lmp", NULL, 0, TF_IMAGE, NULL );
 	if( cl_allow_levelshots->integer )
 		cls.loadingBar = GL_LoadTexture( "gfx.wad/lambda.lmp", NULL, 0, TF_IMAGE|TF_LUMINANCE, NULL );
@@ -623,7 +661,8 @@ void SCR_Init( void )
 
 	if( host.state != HOST_RESTART && !UI_LoadProgs( ))
 	{
-		Msg( "^1Error: ^7can't initialize menu.dll\n" ); // there is non fatal for us
+		Msg( "^1Error: ^7can't initialize menu library\n" ); // this is not fatal for us
+		// console still can't be toggled in-game without extra cmd-line switch
 		if( !host.developer ) host.developer = 1; // we need console, because menu is missing
 	}
 
@@ -651,10 +690,12 @@ void SCR_Shutdown( void )
 	Cmd_RemoveCommand( "timerefresh" );
 	Cmd_RemoveCommand( "skyname" );
 	Cmd_RemoveCommand( "viewpos" );
+	Cmd_RemoveCommand( "sizeup" );
+	Cmd_RemoveCommand( "sizedown" );
 	UI_SetActiveMenu( false );
 
 	if( host.state != HOST_RESTART )
 		UI_UnloadProgs();
-
+	cls.creditsFont.valid = false;
 	scr_init = false;
 }

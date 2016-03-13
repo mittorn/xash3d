@@ -18,9 +18,6 @@ GNU General Public License for more details.
 
 #include "bspfile.h"	// we need some declarations from it
 
-typedef vec_t		vec2_t[2];
-typedef vec_t		vec4_t[4];
-
 /*
 ==============================================================================
 
@@ -112,7 +109,7 @@ typedef struct glpoly_s
 	struct glpoly_s	*chain;
 	int		numverts;
 	int		flags;          		// for SURF_UNDERWATER
-	float		verts[4][VERTEXSIZE];	// variable sized (xyz s1t1 s2t2)
+	float		(*verts)[VERTEXSIZE];	// variable sized (xyz s1t1 s2t2)
 } glpoly_t;
 
 typedef struct mnode_s

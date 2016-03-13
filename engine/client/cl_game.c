@@ -238,7 +238,7 @@ void CL_InitCDAudio( const char *filename )
 		CL_CreatePlaylist( filename );
 	}
 
-	afile = FS_LoadFile( filename, NULL, false );
+	afile = (char *)FS_LoadFile( filename, NULL, false );
 	if( !afile ) return;
 
 	pfile = afile;
@@ -687,7 +687,7 @@ and hold them into permament memory pool
 */
 static void CL_InitTitles( const char *filename )
 {
-	size_t	fileSize;
+	fs_offset_t	fileSize;
 	byte	*pMemFile;
 	int	i;
 
@@ -707,7 +707,7 @@ static void CL_InitTitles( const char *filename )
 	pMemFile = FS_LoadFile( filename, &fileSize, false );
 	if( !pMemFile ) return;
 
-	CL_TextMessageParse( pMemFile, fileSize );
+	CL_TextMessageParse( pMemFile, (int)fileSize );
 	Mem_Free( pMemFile );
 }
 
@@ -806,7 +806,7 @@ const char *CL_SoundFromIndex( int index )
 	sfx_t	*sfx = NULL;
 	int	hSound;
 
-	// make sure what we in-bounds
+	// make sure that we're within bounds
 	index = bound( 0, index, MAX_SOUNDS );
 	hSound = cl.sound_index[index];
 
@@ -1090,6 +1090,8 @@ void CL_ClearWorld( void )
 void CL_InitEdicts( void )
 {
 	ASSERT( clgame.entities == NULL );
+	if( !clgame.mempool )
+		return; // Host_Error without client
 
 	CL_UPDATE_BACKUP = ( cl.maxclients == 1 ) ? SINGLEPLAYER_BACKUP : MULTIPLAYER_BACKUP;
 	cls.num_client_entities = CL_UPDATE_BACKUP * 64;
@@ -1108,18 +1110,15 @@ void CL_InitEdicts( void )
 
 void CL_FreeEdicts( void )
 {
-	if( clgame.entities )
-		Mem_Free( clgame.entities );
+	Z_Free( clgame.entities );
 	clgame.entities = NULL;
 
-	if( clgame.static_entities )
-		Mem_Free( clgame.static_entities );
+	Z_Free( clgame.static_entities );
 	clgame.static_entities = NULL;
 
-	if( cls.packet_entities )
-		Z_Free( cls.packet_entities );
-
+	Z_Free( cls.packet_entities );
 	cls.packet_entities = NULL;
+
 	cls.num_client_entities = 0;
 	cls.next_client_entities = 0;
 	clgame.numStatics = 0;
@@ -1144,7 +1143,7 @@ void CL_ClearEdicts( void )
 static qboolean CL_LoadHudSprite( const char *szSpriteName, model_t *m_pSprite, qboolean mapSprite, uint texFlags )
 {
 	byte	*buf;
-	size_t	size;
+	fs_offset_t	size;
 	qboolean	loaded;
 
 	ASSERT( m_pSprite != NULL );
@@ -1155,7 +1154,7 @@ static qboolean CL_LoadHudSprite( const char *szSpriteName, model_t *m_pSprite, 
 	Q_strncpy( m_pSprite->name, szSpriteName, sizeof( m_pSprite->name ));
 	m_pSprite->flags = 256; // it's hud sprite, make difference names to prevent free shared textures
 
-	if( mapSprite ) Mod_LoadMapSprite( m_pSprite, buf, size, &loaded );
+	if( mapSprite ) Mod_LoadMapSprite( m_pSprite, buf, (size_t)size, &loaded );
 	else Mod_LoadSpriteModel( m_pSprite, buf, &loaded, texFlags );		
 
 	Mem_Free( buf );
@@ -1206,7 +1205,7 @@ HSPRITE pfnSPR_LoadExt( const char *szPicName, uint texFlags )
 			break; // this is a valid spot
 	}
 
-	if( i == MAX_IMAGES ) 
+	if( i >= MAX_IMAGES ) 
 	{
 		MsgDev( D_ERROR, "SPR_Load: can't load %s, MAX_HSPRITES limit exceeded\n", szPicName );
 		return 0;
@@ -1215,7 +1214,10 @@ HSPRITE pfnSPR_LoadExt( const char *szPicName, uint texFlags )
 	// load new model
 	if( CL_LoadHudSprite( name, &clgame.sprites[i], false, texFlags ))
 	{
-		clgame.sprites[i].needload = clgame.load_sequence;
+		if( i < MAX_IMAGES - 1 )
+		{
+			clgame.sprites[i].needload = clgame.load_sequence;
+		}
 		return i;
 	}
 	return 0;
@@ -1229,7 +1231,11 @@ pfnSPR_Load
 */
 HSPRITE pfnSPR_Load( const char *szPicName )
 {
-	return pfnSPR_LoadExt( szPicName, 0 );
+	int texFlags = TF_NOPICMIP;
+	if( cl_sprite_nearest->value )
+		texFlags |= TF_NEAREST;
+
+	return pfnSPR_LoadExt( szPicName, texFlags );
 }
 
 /*
@@ -1366,7 +1372,7 @@ static client_sprite_t *pfnSPR_GetList( char *psz, int *piCount )
 	if( !clgame.itemspath[0] )	// typically it's sprites\*.txt
 		FS_ExtractFilePath( psz, clgame.itemspath );
 
-	afile = FS_LoadFile( psz, NULL, false );
+	afile = (char *)FS_LoadFile( psz, NULL, false );
 	if( !afile ) return NULL;
 
 	pfile = afile;
@@ -1447,10 +1453,10 @@ pfnGetScreenInfo
 get actual screen info
 =============
 */
-static int pfnGetScreenInfo( SCREENINFO *pscrinfo )
+int pfnGetScreenInfo( SCREENINFO *pscrinfo )
 {
 	// setup screen info
-	float scale_factor = Cvar_VariableValue( "hud_scale" );
+	float scale_factor = hud_scale->value;
 	clgame.scrInfo.iSize = sizeof( clgame.scrInfo );
 
 	
@@ -1668,12 +1674,13 @@ pfnDrawCharacter
 returns drawed chachter width (in real screen pixels)
 =============
 */
-static int pfnDrawCharacter( int x, int y, int number, int r, int g, int b )
+int pfnDrawCharacter( int x, int y, int number, int r, int g, int b )
 {
 	if( !cls.creditsFont.valid )
 		return 0;
 
 	number &= 255;
+	number = Con_UtfProcessChar( number );
 
 	if( number < 32 ) return 0;
 	if( y < -clgame.scrInfo.iCharHeight )
@@ -1775,7 +1782,11 @@ GetWindowCenterX
 */
 static int pfnGetWindowCenterX( void )
 {
-	return host.window_center_x;
+	int x = 0;
+#ifdef XASH_SDL
+	SDL_GetWindowPosition( host.hWnd, &x, NULL );
+#endif
+	return host.window_center_x + x;
 }
 
 /*
@@ -1786,7 +1797,11 @@ GetWindowCenterY
 */
 static int pfnGetWindowCenterY( void )
 {
-	return host.window_center_y;
+	int y = 0;
+#ifdef XASH_SDL
+	SDL_GetWindowPosition( host.hWnd, NULL, &y );
+#endif
+	return host.window_center_y + y;
 }
 
 /*
@@ -2258,15 +2273,7 @@ physent_t *pfnGetPhysent( int idx )
 	return NULL;
 }
 
-static struct predicted_player {
-	int flags;
-	int movetype;
-	int solid;
-	int usehull;
-	qboolean active;
-	vec3_t origin; // predicted origin
-	vec3_t angles;
-} predicted_players[MAX_CLIENTS];
+struct predicted_player predicted_players[MAX_CLIENTS];
 
 /*
 =============
@@ -2276,64 +2283,54 @@ pfnSetUpPlayerPrediction
 */
 void pfnSetUpPlayerPrediction( int dopred, int bIncludeLocalClient )
 {
-	int j = 0;
-	int v3 = cl.parsecountmod;	// In original GS code this is "ei", not cl.
-	struct predicted_player *pPlayer = predicted_players;
-	entity_state_t *entState = cl.frames[v3].playerstate; //v5
+	int j;
+	struct predicted_player *pPlayer;
+	entity_state_t *entState;
 
-	qboolean v7; // v7
-	cl_entity_t *clEntity; // v9
-	int v12; // edx@11
+	cl_entity_t *clEntity;
 
-	for( j = 0, pPlayer = predicted_players, entState = cl.frames[v3].playerstate;
+	for( j = 0, pPlayer = predicted_players, entState = cl.frames[cl.parsecountmod].playerstate;
 		 j < MAX_CLIENTS;
 		 j++, pPlayer++, entState++)
 	{
-		v7 = entState->messagenum == cl.parsecount;
 		pPlayer->active = false;
 
-		if( entState->messagenum != cl.parsecount )
-			continue; // not present this frame
+		// Does not work in xash3d
+		//if( entState->messagenum != cl.parsecount )
+			//continue; // not present this frame
 
 		if( !entState->modelindex )
 			continue;
 
+		clEntity = CL_EDICT_NUM( j + 1 );
 		//special for EF_NODRAW and local client?
-		if( entState->effects & EF_NODRAW && bIncludeLocalClient == false )
+		if( ( entState->effects & EF_NODRAW ) && ( bIncludeLocalClient == false ) )
 		{
 			// don't include local player?
-			if( cl.playernum == j)
+			if( cl.playernum == j )
 				continue;
 			else
 			{
-				pPlayer->active = 1;
+				pPlayer->active = true;
 				pPlayer->movetype = entState->movetype;
 				pPlayer->solid = entState->solid;
 				pPlayer->usehull = entState->usehull;
 
-				clEntity = CL_EDICT_NUM( j + 1 );
-				//CL_ComputePlayerOrigin(v9);
-				VectorCopy(clEntity->origin, pPlayer->origin);
-				VectorCopy(clEntity->angles, pPlayer->angles);
+				VectorCopy( clEntity->origin, pPlayer->origin );
+				VectorCopy( clEntity->angles, pPlayer->angles );
 			}
 		}
 		else
 		{
-			if( cl.playernum == j)
+			if( cl.playernum == j )
 				continue;
-			pPlayer->active = 1;
+			pPlayer->active = true;
 			pPlayer->movetype = entState->movetype;
 			pPlayer->solid = entState->solid;
 			pPlayer->usehull = entState->usehull;
 
-			v12 = 17080 * cl.parsecountmod + 340 * j;
-			pPlayer->origin[0] = cl.frames[0].playerstate[0].origin[0] + v12;
-			pPlayer->origin[1] = cl.frames[0].playerstate[0].origin[1] + v12;
-			pPlayer->origin[2] = cl.frames[0].playerstate[0].origin[2] + v12;
-
-			pPlayer->angles[0] = cl.frames[0].playerstate[0].angles[0] + v12;
-			pPlayer->angles[1] = cl.frames[0].playerstate[0].angles[1] + v12;
-			pPlayer->angles[2] = cl.frames[0].playerstate[0].angles[2] + v12;
+			VectorCopy(cl.frames[cl.parsecountmod].playerstate[j].origin, pPlayer->origin);
+			VectorCopy(cl.frames[cl.parsecountmod].playerstate[j].angles, pPlayer->angles);
 		}
 	}
 }
@@ -2482,7 +2479,7 @@ const char *pfnGetGameDirectory( void )
 {
 	static char	szGetGameDir[MAX_SYSPATH];
 
-	Q_sprintf( szGetGameDir, "%s/%s", host.rootdir, GI->gamedir );
+	Q_sprintf( szGetGameDir, "%s", GI->gamedir );
 	return szGetGameDir;
 }
 
@@ -2546,6 +2543,11 @@ model_t *pfnLoadMapSprite( const char *filename )
 {
 	char	name[64];
 	int	i;
+	int texFlags = TF_NOPICMIP;
+
+
+	if( cl_sprite_nearest->value )
+		texFlags |= TF_NEAREST;
 
 	if( !filename || !*filename )
 	{
@@ -2581,7 +2583,7 @@ model_t *pfnLoadMapSprite( const char *filename )
 	}
 
 	// load new map sprite
-	if( CL_LoadHudSprite( name, &clgame.sprites[i], true, 0 ))
+	if( CL_LoadHudSprite( name, &clgame.sprites[i], true, texFlags ))
 	{
 		clgame.sprites[i].needload = clgame.load_sequence;
 		return &clgame.sprites[i];
@@ -2806,24 +2808,35 @@ void pfnSPR_DrawGeneric( int frame, int x, int y, const wrect_t *prc, int blends
 =============
 pfnDrawString
 
-TODO: implement
 =============
 */
 int pfnDrawString( int x, int y, const char *str, int r, int g, int b )
 {
-	return 0;
+	Con_UtfProcessChar(0);
+
+	// draw the string until we hit the null character or a newline character
+	for ( ; *str != 0 && *str != '\n'; str++ )
+	{
+		x += pfnDrawCharacter( x, y, (unsigned char)*str, r, g, b );
+	}
+
+	return x;
 }
 
 /*
 =============
 pfnDrawStringReverse
 
-TODO: implement
 =============
 */
 int pfnDrawStringReverse( int x, int y, const char *str, int r, int g, int b )
 {
-	return 0;
+	unsigned char *szIt;
+	// find the end of the string
+	for( szIt = ( unsigned char *)str; *szIt != 0; szIt++ )
+		x -= clgame.scrInfo.charWidths[ *szIt ];
+	pfnDrawString( x, y, (char*)str, r, g, b );
+	return x;
 }
 
 /*
@@ -2939,7 +2952,7 @@ void pfnFillRGBABlend( int x, int y, int width, int height, int r, int g, int b,
 
 	pglEnable( GL_BLEND );
 	pglDisable( GL_ALPHA_TEST );
-	pglBlendFunc( GL_ONE_MINUS_SRC_ALPHA, GL_ONE );
+	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
 	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 
 	R_DrawStretchPic( x, y, width, height, 0, 0, 1, 1, cls.fillImage );
@@ -3327,7 +3340,8 @@ TriForParams
 */
 void TriFogParams( float flDensity, int iFogSkybox )
 {
-	// TODO: implement
+	RI.fogDensity = flDensity;
+	RI.fogCustom = iFogSkybox;
 }
 
 /*
@@ -4086,7 +4100,7 @@ qboolean CL_LoadProgs( const char *name )
 	}
 
 	Cvar_Get( "cl_nopred", "1", CVAR_ARCHIVE|CVAR_USERINFO, "disable client movement predicting" );
-	Cvar_Get( "cl_lw", "0", CVAR_ARCHIVE|CVAR_USERINFO, "enable client weapon predicting" );
+	cl_lw = Cvar_Get( "cl_lw", "0", CVAR_ARCHIVE|CVAR_USERINFO, "enable client weapon predicting" );
 	Cvar_Get( "cl_lc", "0", CVAR_ARCHIVE|CVAR_USERINFO, "enable lag compensation" );
 	Cvar_FullSet( "host_clientloaded", "1", CVAR_INIT );
 
@@ -4105,6 +4119,7 @@ qboolean CL_LoadProgs( const char *name )
 	{
 		MsgDev( D_WARN, "CL_LoadProgs: couldn't get render API\n" );
 	}
+	Mobile_Init(); // Xash3D extension: mobile interface
 
 	// initialize game
 	clgame.dllFuncs.pfnInit();

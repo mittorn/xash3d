@@ -495,7 +495,6 @@ void CL_ParseStaticDecal( sizebuf_t *msg )
 {
 	vec3_t		origin;
 	int		decalIndex, entityIndex, modelIndex;
-	cl_entity_t	*ent = NULL;
 	float		scale;
 	int		flags;
 
@@ -575,7 +574,7 @@ void CL_ParseServerData( sizebuf_t *msg )
 	cls.serverProtocol = i;
 
 	if( i != PROTOCOL_VERSION )
-		Host_Error( "Server use invalid protocol (%i should be %i)\n", i, PROTOCOL_VERSION );
+		Host_Error( "Server uses invalid protocol (%i should be %i)\n", i, PROTOCOL_VERSION );
 
 	cl.servercount = BF_ReadLong( msg );
 	cl.checksum = BF_ReadLong( msg );
@@ -616,8 +615,6 @@ void CL_ParseServerData( sizebuf_t *msg )
 #endif
 	if( !cls.changedemo )
 		UI_SetActiveMenu( cl.background );
-	else if( !cls.demoplayback )
-		Key_SetKeyDest( key_menu );
 
 	cl.refdef.viewentity = cl.playernum + 1; // always keep viewent an actual
 
@@ -712,7 +709,32 @@ void CL_ParseClientData( sizebuf_t *msg )
 	frame->time = cl.mtime[0];				// mark network received time
 	frame->receivedtime = host.realtime;			// time now that we are parsing.  
 
+	if( cl.last_command_ack != -1 )
+	{
+		int last_predicted;
+		entity_state_t * ps;
+		entity_state_t * pps;
+		clientdata_t * pcd;
+		clientdata_t * ppcd;
+		weapon_data_t * wd;
+		weapon_data_t * pwd;
+
+		last_predicted = ( cl.last_incoming_sequence + (
+							   cls.netchan.incoming_acknowledged - cl.last_command_ack)) & CL_UPDATE_MASK;
+
+		pps = &cl.predict[last_predicted].playerstate;
+		ppcd = &cl.predict[last_predicted].client;
+		pwd = cl.predict[last_predicted].weapondata;
+
+		ps = &frame->playerstate[cl.playernum];
+		pcd = &frame->local.client;
+		wd = frame->local.weapondata;
+
+		clgame.dllFuncs.pfnTxferPredictionData( ps, pps, pcd, ppcd, wd, pwd );
+	}
+
 	// do this after all packets read for this frame?
+	cl.last_command_ack = cls.netchan.incoming_acknowledged;
 	cl.last_incoming_sequence = cls.netchan.incoming_sequence;
 
 	if( hltv->integer ) return;	// clientdata for spectators ends here
@@ -769,6 +791,8 @@ void CL_ParseBaseline( sizebuf_t *msg )
 	if( newnum >= clgame.maxEntities ) Host_Error( "CL_AllocEdict: no free edicts\n" );
 
 	ent = CL_EDICT_NUM( newnum );
+	if( !ent )
+		Host_Error( "CL_ParseBaseline: got invalid entity");
 	Q_memset( &ent->prevstate, 0, sizeof( ent->prevstate ));
 	ent->index = newnum;
 
@@ -1022,23 +1046,30 @@ void CL_CheckingResFile( char *pResFileName )
 	byte	data[32];
 
 	if( FS_FileExists( pResFileName, false ))
-		return;	// already existing
+		return;	// already exists
+	if( FS_FileExists( FS_ToLowerCase( pResFileName ), false ) )
+		return;
 
 	cls.downloadcount++;
 
-	Msg( "Starting downloads file: %s\n", pResFileName );
+	
+	if( cl_allow_fragment->value )
+	{
+		Msg( "Starting file download: %s\n", pResFileName );
+		if( cls.state == ca_disconnected ) return;
 
-	if( cls.state == ca_disconnected ) return;
+		BF_Init( &buf, "ClientPacket", data, sizeof( data ));
+		BF_WriteByte( &buf, clc_resourcelist );
+		BF_WriteString( &buf, pResFileName );
 
-	BF_Init( &buf, "ClientPacket", data, sizeof( data ));
-	BF_WriteByte( &buf, clc_resourcelist );
-	BF_WriteString( &buf, pResFileName );
+		if( !cls.netchan.remote_address.type )	// download in singleplayer ???
+			cls.netchan.remote_address.type = NA_LOOPBACK;
 
-	if( !cls.netchan.remote_address.type )	// download in singleplayer ???
-		cls.netchan.remote_address.type = NA_LOOPBACK;
-
-	// make sure message will be delivered
-	Netchan_Transmit( &cls.netchan, BF_GetNumBytesWritten( &buf ), BF_GetData( &buf ));
+		// make sure message will be delivered
+		Netchan_Transmit( &cls.netchan, BF_GetNumBytesWritten( &buf ), BF_GetData( &buf ));
+	}
+	else
+	HTTP_AddDownload( pResFileName, -1, true );
 
 }
 
@@ -1078,8 +1109,21 @@ void CL_ParseResourceList( sizebuf_t *msg )
 
 	cls.downloadcount = 0;
 
+	HTTP_ResetProcessState();
+
 	for( i = 0; i < reslist.rescount; i++ )
 	{
+		// skip some types
+#if 0
+		if( reslist.restype[i] == t_model && !Q_strchr( download_types->latched_string, 'm' ) )
+			continue;
+		if( reslist.restype[i] == t_sound && !Q_strchr( download_types->latched_string, 's' ) )
+			continue;
+		if( reslist.restype[i] == t_eventscript && !Q_strchr( download_types->latched_string, 'e' ) )
+			continue;
+		if( reslist.restype[i] == t_generic && !Q_strchr( download_types->latched_string, 'c' ) )
+			continue;
+#endif
 		if( reslist.restype[i] == t_sound )
 			CL_CheckingSoundResFile( reslist.resnames[i] );
 		else CL_CheckingResFile( reslist.resnames[i] );
@@ -1164,9 +1208,9 @@ Set screen shake
 */
 void CL_ParseScreenShake( sizebuf_t *msg )
 {
-	clgame.shake.amplitude = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1<<12));
-	clgame.shake.duration = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1<<12));
-	clgame.shake.frequency = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1<<8));
+	clgame.shake.amplitude = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1U << 12));
+	clgame.shake.duration = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1U << 12));
+	clgame.shake.frequency = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1U << 8));
 	clgame.shake.time = cl.time + max( clgame.shake.duration, 0.01f );
 	clgame.shake.next_shake = 0.0f; // apply immediately
 }
@@ -1183,8 +1227,8 @@ void CL_ParseScreenFade( sizebuf_t *msg )
 	float		duration, holdTime;
 	screenfade_t	*sf = &clgame.fade;
 
-	duration = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1<<12));
-	holdTime = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1<<12));
+	duration = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1U << 12));
+	holdTime = (float)(word)BF_ReadShort( msg ) * (1.0f / (float)(1U << 12));
 	sf->fadeFlags = BF_ReadShort( msg );
 
 	sf->fader = BF_ReadByte( msg );
@@ -1315,7 +1359,7 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num )
 	if( svc_num < svc_lastmsg || svc_num >= ( MAX_USER_MESSAGES + svc_lastmsg ))
 	{
 		// out or range
-		Host_Error( "CL_ParseUserMessage: illegible server message %d\n", svc_num );
+		MsgDev( D_ERROR, "CL_ParseUserMessage: illegible server message %d (out or range)\n", svc_num );
 		return;
 	}
 
@@ -1327,7 +1371,10 @@ void CL_ParseUserMessage( sizebuf_t *msg, int svc_num )
 	}
 
 	if( i == MAX_USER_MESSAGES ) // probably unregistered
-		Host_Error( "CL_ParseUserMessage: illegible server message %d\n", svc_num );
+	{
+		MsgDev( D_ERROR, "CL_ParseUserMessage: illegible server message %d (probably unregistered)\n", svc_num );
+		return;
+	}
 
 	// NOTE: some user messages handled into engine
 	if( !Q_strcmp( clgame.msg[i].name, "ScreenShake" ))

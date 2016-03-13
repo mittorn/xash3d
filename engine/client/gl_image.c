@@ -44,6 +44,18 @@ static byte	r_particleTexture[8][8] =
 {0,0,0,0,0,0,0,0},
 };
 
+static byte	r_oldParticleTexture[8][8] =
+{
+{0,0,0,0,0,0,0,0},
+{0,0,0,0,0,0,0,0},
+{0,0,1,1,1,1,0,0},
+{0,0,1,1,1,1,0,0},
+{0,0,1,1,1,1,0,0},
+{0,0,1,1,1,1,0,0},
+{0,0,0,0,0,0,0,0},
+{0,0,0,0,0,0,0,0},
+};
+
 const char *GL_Target( GLenum target )
 {
 	switch( target )
@@ -214,7 +226,7 @@ void GL_TexFilter( gltexture_t *tex, qboolean update )
 	if( tex->flags & ( TF_BORDER|TF_ALPHA_BORDER ) && !GL_Support( GL_CLAMP_TEXBORDER_EXT ))
 	{
 		// border is not support, use clamp instead
-		tex->flags &= ~(TF_BORDER||TF_ALPHA_BORDER);
+		tex->flags &= ~(TF_BORDER|TF_ALPHA_BORDER);
 		tex->flags |= TF_CLAMP;
 	}
 
@@ -1610,7 +1622,7 @@ int GL_LoadTextureInternal( const char *name, rgbdata_t *pic, texFlags_t flags, 
 		}
 
 		tex = &r_textures[i];
-		hash = Com_HashKey( name, TEXTURES_HASH_SIZE );
+		//hash = Com_HashKey( name, TEXTURES_HASH_SIZE );
 		Q_strncpy( tex->name, name, sizeof( tex->name ));
 		tex->texnum = i;	// texnum is used for fast acess into r_textures array too
 		tex->flags = flags;
@@ -1624,7 +1636,7 @@ int GL_LoadTextureInternal( const char *name, rgbdata_t *pic, texFlags_t flags, 
 	GL_TexFilter( tex, update ); // update texture filter, wrap etc
 
 	if( !update )
-          {
+	{
 		// add to hash table
 		hash = Com_HashKey( tex->name, TEXTURES_HASH_SIZE );
 		tex->nextHash = r_texturesHashTable[hash];
@@ -3599,7 +3611,7 @@ R_ParseClearPixels
 static rgbdata_t *R_ParseClearPixels( char **script, int *samples, texFlags_t *flags )
 {
 	char	token[256];
-	qboolean	clearAlpha;
+	qboolean	clearAlpha = false;
 	rgbdata_t *pic;
 
 	*script = COM_ParseFile( *script, token );
@@ -3657,7 +3669,7 @@ R_ParseMovePixels
 static rgbdata_t *R_ParseMovePixels( char **script, int *samples, texFlags_t *flags )
 {
 	char	token[256];
-	qboolean	alphaToColor;
+	qboolean	alphaToColor = false;
 	rgbdata_t *pic;
 
 	*script = COM_ParseFile( *script, token );
@@ -3883,6 +3895,37 @@ static rgbdata_t *R_InitParticleTexture( texFlags_t *flags )
 			dy = y - 8;
 			d = 255 - 35 * sqrt( dx2 + dy * dy );
 			data2D[( y*16 + x ) * 4 + 3] = bound( 0, d, 255 );
+		}
+	}
+	return &r_image;
+}
+
+/*
+==================
+R_InitOldParticleTexture
+==================
+*/
+static rgbdata_t *R_InitOldParticleTexture(texFlags_t *flags)
+{
+	int	x, y;
+
+	// particle texture
+	r_image.width = r_image.height = 8;
+	r_image.buffer = data2D;
+	r_image.flags = (IMAGE_HAS_COLOR | IMAGE_HAS_ALPHA);
+	r_image.type = PF_RGBA_32;
+	r_image.size = r_image.width * r_image.height * 4;
+
+	*flags = TF_NOPICMIP | TF_NOMIPMAP;
+
+	for (x = 0; x < 8; x++)
+	{
+		for (y = 0; y < 8; y++)
+		{
+			data2D[(y * 8 + x) * 4 + 0] = 255;
+			data2D[(y * 8 + x) * 4 + 1] = 255;
+			data2D[(y * 8 + x) * 4 + 2] = 255;
+			data2D[(y * 8 + x) * 4 + 3] = r_oldParticleTexture[x][y] * 255;
 		}
 	}
 	return &r_image;
@@ -4142,7 +4185,8 @@ R_InitAttenuationTexture3D
 static rgbdata_t *R_InitAttenTexture3D( texFlags_t *flags )
 {
 	vec3_t	v = { 0, 0, 0 };
-	int	x, y, z, d, size, size2, halfsize;
+	int	x, y, z, d, size;
+	//int	size2, halfsize;
 	float	intensity;
 
 	if( !GL_Support( GL_TEXTURE_3D_EXT ))
@@ -4158,9 +4202,9 @@ static rgbdata_t *R_InitAttenTexture3D( texFlags_t *flags )
 	r_image.size = r_image.width * r_image.height * r_image.depth * 4;
 
 	size = 32;
-	halfsize = size / 2;
-	intensity = halfsize * halfsize;
-	size2 = size * size;
+	//halfsize = size / 2;
+	//intensity = halfsize * halfsize;
+	//size2 = size * size;
 
 	for( x = 0; x < r_image.width; x++ )
 	{
@@ -4414,7 +4458,7 @@ static rgbdata_t *R_InitVSDCTCubemap( texFlags_t *flags )
 	// YY
 	// ZZ
 	// stores abs(dir.xy), offset.xy/2.5
-	byte data[4*6] =
+	static byte data[4*6] =
 	{
 		0xFF, 0x00, 0x33, 0x33, // +X: <1, 0>, <0.5, 0.5>
 		0xFF, 0x00, 0x99, 0x33, // -X: <1, 0>, <1.5, 0.5>
@@ -4460,6 +4504,7 @@ static void R_InitBuiltinTextures( void )
 	{ "*gray", &tr.grayTexture, R_InitGrayTexture, TEX_SYSTEM },
 	{ "*black", &tr.blackTexture, R_InitBlackTexture, TEX_SYSTEM },
 	{ "*particle", &tr.particleTexture, R_InitParticleTexture, TEX_SYSTEM },
+	{ "*oldparticle", &tr.oldParticleTexture, R_InitOldParticleTexture, TEX_SYSTEM },
 	{ "*particle2", &tr.particleTexture2, R_InitParticleTexture2, TEX_SYSTEM },
 	{ "*cintexture", &tr.cinTexture, R_InitCinematicTexture, TEX_NOMIP },	// force linear filter
 	{ "*dlight", &tr.dlightTexture, R_InitDlightTexture, TEX_LIGHTMAP },

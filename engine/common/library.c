@@ -19,15 +19,48 @@ GNU General Public License for more details.
 #include "library.h"
 #include "filesystem.h"
 
-#ifndef XASH_NONSTANDART_LOAD
+#ifndef _WIN32
 
 #ifdef __ANDROID__
 #include "platform/android/dlsym-weak.h"
 #endif
 
+
+#ifdef NO_LIBDL
+
+#ifndef DLL_LOADER
+#error Enable at least one dll backend!!!
+#endif
+
+void *dlsym(void *handle, const char *symbol )
+{
+	MsgDev( D_NOTE, "dlsym( %p, \"%s\" ): stub\n", handle, symbol );
+	return NULL;
+}
+void *dlopen(const char *name, int flag )
+{
+	MsgDev( D_NOTE, "dlopen( \"%s\", %d ): stub\n", name, flag );
+	return NULL;
+}
+int dlclose(void *handle)
+{
+	MsgDev( D_NOTE, "dlsym( %p ): stub\n", handle );
+	return 0;
+}
+char *dlerror( void )
+{
+	return "Loading ELF libraries not supported in this build!\n";
+}
+int dladdr( const void *addr, Dl_info *info )
+{
+	return 0;
+}
+#endif
+
+
 void *Com_LoadLibrary( const char *dllname, int build_ordinals_table )
 {
-	searchpath_t	*search;
+	searchpath_t	*search = NULL;
 	int		pack_ind;
 	char	path [MAX_SYSPATH];
 
@@ -40,15 +73,16 @@ void *Com_LoadLibrary( const char *dllname, int build_ordinals_table )
 	}
 	else
 #endif
-#ifdef _WIN32
-	pHandle = LoadLibrary( dllname );
-#else
 	pHandle = dlopen( dllname, RTLD_LAZY );
-#endif
 	if(!pHandle)
 	{
 		search = FS_FindFile( dllname, &pack_ind, true );
 
+		if( !search )
+		{
+			MsgDev( D_WARN, "loading library %s: %s\n", dllname, dlerror() );
+			return NULL;
+		}
 		sprintf( path, "%s%s", search->filename, dllname );
 
 #ifdef DLL_LOADER
@@ -58,14 +92,10 @@ void *Com_LoadLibrary( const char *dllname, int build_ordinals_table )
 		}
 		else
 #endif
-#ifdef _WIN32
-	pHandle = LoadLibrary( path );
-#else
-	pHandle = dlopen( path, RTLD_LAZY );
-#endif
+		pHandle = dlopen( path, RTLD_LAZY );
 		if(!pHandle)
 		{
-			MsgDev(D_ERROR, "loading library %s: %s\n", dllname, dlerror());
+			MsgDev( D_WARN, "loading library %s: %s\n", dllname, dlerror() );
 			return NULL;
 		}
 	}
@@ -81,11 +111,7 @@ void Com_FreeLibrary( void *hInstance )
 		return Loader_FreeLibrary(hInstance);
 	else
 #endif
-#ifdef _WIN32
-	FreeLibrary( hInstance);
-#else
 	dlclose( hInstance );
-#endif
 }
 
 void *Com_GetProcAddress( void *hInstance, const char *name )
@@ -96,11 +122,7 @@ void *Com_GetProcAddress( void *hInstance, const char *name )
 		return Loader_GetProcAddress(hInstance, name);
 	else
 #endif
-#ifdef _WIN32
-	return GetProcAddress( hInstance, name );
-#else
 	return dlsym( hInstance, name );
-#endif
 }
 
 void *Com_FunctionFromName( void *hInstance, const char *pName )
@@ -120,9 +142,7 @@ void *Com_FunctionFromName( void *hInstance, const char *pName )
 		function = dlsym_weak( hInstance, pName );
 		if(!function)
 #endif
-#ifndef _WIN32
-			MsgDev(D_ERROR, "FunctionFromName: Can't get symbol %s: %s", pName, dlerror());
-#endif
+			MsgDev(D_ERROR, "FunctionFromName: Can't get symbol %s: %s\n", pName, dlerror());
 	}
 	return function;
 }
@@ -137,11 +157,9 @@ const char *Com_NameForFunction( void *hInstance, void *function )
 #endif
 	// Note: dladdr() is a glibc extension
 	{
-#ifndef _WIN32
 		Dl_info info;
 		dladdr((void*)function, &info);
 		return info.dli_sname;
-#endif
 	}
 }
 #else
@@ -918,7 +936,7 @@ void *Com_LoadLibraryExt( const char *dllname, int build_ordinals_table, qboolea
 
 	if( !hInst->hInstance )
 	{
-		MsgDev( D_NOTE, "Sys_LoadLibrary: Loading %s - failed\n", dllname );
+		MsgDev( D_NOTE, "Sys_LoadLibrary: Loading %s - failed: %d\n", dllname, GetLastError() );
 		Com_FreeLibrary( hInst );
 		return NULL;
 	}
@@ -1002,7 +1020,7 @@ void *Com_FunctionFromName(void *hInstance, const char *pName)
 	return 0;
 }
 
-const char *Com_NameForFunction( void *hInstance, dword function )
+const char *Com_NameForFunction( void *hInstance, void * function )
 {
 	dll_user_t	*hInst = (dll_user_t *)hInstance;
 	int		i, index;
@@ -1014,7 +1032,7 @@ const char *Com_NameForFunction( void *hInstance, dword function )
 	{
 		index = hInst->ordinals[i];
 
-		if(( function - hInst->funcBase ) == hInst->funcs[index] )
+		if(( (char*)function - hInst->funcBase ) == hInst->funcs[index] )
 			return hInst->names[i];
 	}
 	// couldn't find the function address to return name
